@@ -996,3 +996,14 @@ def test_client_credentials_never_leak(
     asyncio.run(tool.ainvoke({"chainId": 1, "query": "USDC"}))
     assert len(seen) == 2
     assert [r.headers.get("authorization") for r in seen] == [expected, expected]
+
+
+@pytest.mark.parametrize(("cls", "path", "args", "body"), CASES)
+async def test_api_refusal_with_http_200_is_tool_content(
+    cls: type[BaseTool], path: str, args: dict, body: dict
+) -> None:
+    api, _ = mocked(answer(200, REFUSAL))
+    assert json.loads(cls(api_wrapper=api).invoke(args)) == REFUSAL
+    message = await cls(api_wrapper=api).ainvoke(call(cls(), args))
+    assert message.status == "error"
+    assert json.loads(message.content) == REFUSAL

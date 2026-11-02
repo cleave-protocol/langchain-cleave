@@ -91,6 +91,8 @@ class CleaveAPIWrapper(BaseModel):
         except ValueError:
             body = None
         if response.is_success:
+            if isinstance(body, dict) and isinstance(body.get("error"), dict):
+                raise CleaveAPIError(response.status_code, body)
             if isinstance(body, dict):
                 return body
             raise _refusal(

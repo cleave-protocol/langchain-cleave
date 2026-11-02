@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -36,13 +37,17 @@ def by_name(name: str) -> dict[str, Any]:
 def run_check(v: dict[str, Any]) -> CheckResult:
     if v["tool"] == "plan_swap":
         return check_plan_swap(v["request"], v["response"])
-    return check_get_gas(v["request"], v["response"])
+    return check_get_gas(v["request"], v["response"], now_of(v))
+
+
+def now_of(v: dict[str, Any]) -> int | None:
+    return v.get("context", {}).get("nowSec")
 
 
 def screen(v: dict[str, Any]) -> dict[str, Any]:
     if v["tool"] == "plan_swap":
         return screen_plan_swap(v["request"], v["response"])
-    return screen_get_gas(v["request"], v["response"])
+    return screen_get_gas(v["request"], v["response"], now_of(v))
 
 
 def verdict(v: dict[str, Any]) -> dict[str, Any]:
@@ -62,7 +67,7 @@ def test_vectors_cover_every_rule_live_probes_and_the_table_version() -> None:
     rules = {v["expect"]["rule"] for v in VECTORS if v["expect"]["result"] == "fail"}
     assert sorted(rules) == RULES
     assert len([v for v in VECTORS if v["name"].startswith("live ")]) >= 30
-    assert len(VECTORS) == 225
+    assert len(VECTORS) == 259
     assert FILE["allowlistVersion"] == ALLOWLIST["version"]
 
 
@@ -353,8 +358,12 @@ async def test_an_api_refusal_keeps_only_its_error_fields(
     cls: type[CleavePlanSwap] | type[CleaveGetGas],
 ) -> None:
     api, _ = answering(API_REFUSAL)
-    assert cls(api_wrapper=api).invoke(tool_args(cls)) == KEPT_REFUSAL
-    assert await cls(api_wrapper=api).ainvoke(tool_args(cls)) == KEPT_REFUSAL
+    assert json.loads(cls(api_wrapper=api).invoke(tool_args(cls))) == KEPT_REFUSAL
+    tool = cls(api_wrapper=api, handle_tool_error=False)
+    with pytest.raises(CleaveAPIError) as caught:
+        await tool.ainvoke(tool_args(cls))
+    assert caught.value.status == 200
+    assert caught.value.body == KEPT_REFUSAL
 
 
 @pytest.mark.parametrize("cls", [CleavePlanSwap, CleaveGetGas])
@@ -455,3 +464,23 @@ def test_a_stablecoin_sell_to_an_unpinned_token_may_carry_no_referrer() -> None:
     v["response"]["receive"].pop("token", None)
     request = {**v["request"], "buyToken": "SOMECOIN"}
     assert check_plan_swap(request, v["response"]) == CheckResult(True)
+
+
+def test_the_gas_deadline_bound_uses_the_clock_by_default() -> None:
+    v = by_name("live gas-1-same")
+    v["response"]["order"]["deadline"] = int(time.time()) + 5000
+    late = "G2: the order deadline is too far away"
+    assert check_get_gas(v["request"], v["response"]).message == late
+    deadline = v["response"]["order"]["deadline"]
+    r = check_get_gas(v["request"], v["response"], deadline)
+    assert r.rule == "G4"
+
+
+def test_a_padded_buy_symbol_is_pinned_after_trimming() -> None:
+    v = by_name("stablecoin bridge charged the house fee")
+    del v["response"]["receive"]["token"]
+    request = {**v["request"], "buyToken": " USDC "}
+    r = check_plan_swap(request, v["response"])
+    assert (
+        r.message == "P5: the referral fee goes to another address or has another size"
+    )

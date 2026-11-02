@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, NoReturn
@@ -43,6 +44,7 @@ class _Chain:
     composer: str
     house_referrer: str
     stablecoins: frozenset[str]
+    stargate_rail_id: str
     delivery_shell: str
     gas_pay: _GasPay | None
     targets: dict[str, _Target]
@@ -93,6 +95,7 @@ def _chain(entry: dict[str, Any]) -> _Chain:
         composer=entry["composer"].lower(),
         house_referrer=entry["houseReferrer"].lower(),
         stablecoins=frozenset(a.lower() for a in entry["stablecoins"]),
+        stargate_rail_id=entry["stargateRailId"].lower(),
         delivery_shell=entry["gasDeliveryShell"].lower(),
         gas_pay=None
         if pay is None
@@ -177,6 +180,9 @@ REFERRAL = {
     CROSS_NATIVE: (6, 7),
     BRIDGE: (7, 8),
 }
+NATIVE_TOKEN = {SWAP: 0, MEASURED: 0, CROSS: 0, CROSS_NATIVE: 0, DEPOSIT_NATIVE: 3}
+RAIL_WORD = {CROSS: 12, CROSS_NATIVE: 12, BRIDGE: 2}
+GAS_SKEW_SEC = 120
 MIN_OUT = {
     SWAP: (3,),
     MEASURED: (3, 10),
@@ -436,10 +442,11 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
         _fail("P3", "send is on another chain")
     token = _address(send.get("token"), "P3", "send.token")
     sell: Any = req.get("sellToken")
-    if isinstance(sell, str) and ADDRESS.fullmatch(sell):
+    sell = sell.strip(JS_SPACE)
+    if ADDRESS.fullmatch(sell):
         pinned: str | None = sell.lower()
     else:
-        pinned = chain.symbols.get(sell.strip(JS_SPACE).lower())
+        pinned = chain.symbols.get(sell.lower())
     if pinned is not None and pinned != token:
         _fail("P3", "send.token is not the sell token")
     if _normal_decimal(send.get("amount"), "P3", "send.amount") != _normal_decimal(
@@ -478,12 +485,19 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
     elif not native:
         if _word_address(main.data, pulls.token, "P4", "token") != token:
             _fail("P4", "the main call spends another token")
-        if last is not None:
-            pulled = max(_word_int(main.data, k, "P4", "amount") for k in pulls.pulled)
-            if pulled != last:
-                _fail("P4", "the main call pulls another amount than approved")
-            if pulled > 2 * _word_int(main.data, AMOUNT_IN[selector], "P4", "amountIn"):
-                _fail("P4", "the main call pulls more than twice its input")
+        pulled = max(_word_int(main.data, k, "P4", "amount") for k in pulls.pulled)
+        if last is not None and pulled != last:
+            _fail("P4", "the main call pulls another amount than approved")
+        if pulled > 2 * _word_int(main.data, AMOUNT_IN[selector], "P4", "amountIn"):
+            _fail("P4", "the main call pulls more than twice its input")
+    wrapped_word = NATIVE_TOKEN.get(selector)
+    if (
+        native
+        and wrapped_word is not None
+        and _word_address(main.data, wrapped_word, "P4", "token")
+        != chain.wrapped_native
+    ):
+        _fail("P4", "the main call spends another token")
     if native or token == chain.wrapped_native:
         decimals: int | None = 18
     elif token == chain.usdc:
@@ -507,12 +521,18 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
     if not isinstance(fees, list):
         _fail("P5", "fees are malformed")
     value = _units(send.get("amount"), 18, "P5", "send.amount") if native else 0
-    for f in fees:
-        fee = _object(f, "P5", "fee")
-        if fee.get("kind") != "native_messaging":
-            continue
-        if target.role != "router_v3":
-            _fail("P5", "only the router takes a native messaging fee")
+    objects = [_object(f, "P5", "fee") for f in fees]
+    messaging = [f for f in objects if f.get("kind") == "native_messaging"]
+    if len(messaging) > 1:
+        _fail("P5", "more than one native messaging fee")
+    for fee in messaging:
+        rail_word = RAIL_WORD.get(selector)
+        if (
+            rail_word is None
+            or "0x" + _word(main.data, rail_word, "P5", "railId")
+            != chain.stargate_rail_id
+        ):
+            _fail("P5", "only the Stargate rail takes a native messaging fee")
         value += _units(fee.get("amount"), 18, "P5", "fee amount")
     if main.value != value:
         _fail("P5", "the main call sends another native value")
@@ -528,14 +548,15 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
         receive = body.get("receive")
         shown = receive.get("token") if isinstance(receive, dict) else None
         buy: Any = req.get("buyToken")
+        buy = buy.strip(JS_SPACE)
         if isinstance(shown, str) and ADDRESS.fullmatch(shown):
             token_out: str | None = shown.lower()
-        elif isinstance(buy, str) and ADDRESS.fullmatch(buy):
+        elif ADDRESS.fullmatch(buy):
             token_out = buy.lower()
         elif dst is None:
             token_out = None
         else:
-            token_out = dst.symbols.get(buy.strip(JS_SPACE).lower())
+            token_out = dst.symbols.get(buy.lower())
         if same_chain:
             allowed = [free]
         elif token not in chain.stablecoins:
@@ -632,7 +653,7 @@ def _encode_order(
     return "".join(words)
 
 
-def _gas(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
+def _gas(req: dict[str, Any], body: Mapping[str, Any], now_sec: int, at: _Step) -> None:
     if "offer" in req:
         return
 
@@ -700,10 +721,17 @@ def _gas(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
         and _integer(message.get("value"), "G2", "message.value") != amount
     ):
         _fail("G2", "the authorization moves another amount")
-    if message is not None and _integer(
-        message.get("validBefore"), "G2", "validBefore"
-    ) > _integer(order.get("deadline"), "G2", "order.deadline"):
+    deadline = _integer(order.get("deadline"), "G2", "order.deadline")
+    if (
+        message is not None
+        and _integer(message.get("validBefore"), "G2", "validBefore") > deadline
+    ):
         _fail("G2", "the authorization outlives the order")
+    window = (
+        900 if _same(pay_chain_id, chain_id) and not _same(pay_chain_id, 1) else 1200
+    )
+    if deadline > int(now_sec + window + GAS_SKEW_SEC):
+        _fail("G2", "the order deadline is too far away")
     if _integer(order.get("chainId"), "G2", "order.chainId") != int(pay_chain_id):
         _fail("G2", "the order is on another chain")
     if _address(order.get("token"), "G2", "order.token") != usdc:
@@ -810,9 +838,12 @@ def check_plan_swap(
 
 
 def check_get_gas(
-    request: Mapping[str, Any] | BaseModel, body: Mapping[str, Any]
+    request: Mapping[str, Any] | BaseModel,
+    body: Mapping[str, Any],
+    now_sec: int | None = None,
 ) -> CheckResult:
-    return _guard(lambda at: _gas(_request(request), body, at))
+    now = int(time.time()) if now_sec is None else now_sec
+    return _guard(lambda at: _gas(_request(request), body, now, at))
 
 
 PLAN_KEYS = (
@@ -928,12 +959,14 @@ def screen_plan_swap(
 
 
 def screen_get_gas(
-    request: Mapping[str, Any] | BaseModel, body: Mapping[str, Any]
+    request: Mapping[str, Any] | BaseModel,
+    body: Mapping[str, Any],
+    now_sec: int | None = None,
 ) -> dict[str, Any]:
     refusal = api_refusal(body)
     if refusal is not None:
         return refusal
-    result = check_get_gas(request, body)
+    result = check_get_gas(request, body, now_sec)
     if not result.ok:
         return address_refusal(str(result.message))
     return keep_gas(request, body)
