@@ -41,6 +41,8 @@ class _Chain:
     wrapped_native: str
     symbols: dict[str, str]
     composer: str
+    house_referrer: str
+    stablecoins: frozenset[str]
     delivery_shell: str
     gas_pay: _GasPay | None
     targets: dict[str, _Target]
@@ -72,6 +74,8 @@ NATIVE = ALLOWLIST["nativeSentinel"].lower()
 HANDLER = ALLOWLIST["acrossHandler"].lower()
 FACTORY = ALLOWLIST["gas"]["factory"].lower()
 FEE_RECIPIENT = ALLOWLIST["gas"]["feeRecipient"].lower()
+ZERO_ADDRESS = "0x" + "0" * 40
+REFERRAL_BPS = ALLOWLIST["referral"]
 
 
 def _chain(entry: dict[str, Any]) -> _Chain:
@@ -87,6 +91,8 @@ def _chain(entry: dict[str, Any]) -> _Chain:
             entry["wrappedSymbol"].lower(): entry["wrappedNative"].lower(),
         },
         composer=entry["composer"].lower(),
+        house_referrer=entry["houseReferrer"].lower(),
+        stablecoins=frozenset(a.lower() for a in entry["stablecoins"]),
         delivery_shell=entry["gasDeliveryShell"].lower(),
         gas_pay=None
         if pay is None
@@ -163,6 +169,13 @@ AMOUNT_IN = {
     SPOKE_DEPOSIT: 4,
     DEPOSIT_NATIVE: 4,
     WITHDRAW: 0,
+}
+REFERRAL = {
+    SWAP: (6, 7),
+    MEASURED: (6, 7),
+    CROSS: (6, 7),
+    CROSS_NATIVE: (6, 7),
+    BRIDGE: (7, 8),
 }
 MIN_OUT = {
     SWAP: (3,),
@@ -503,6 +516,37 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
         value += _units(fee.get("amount"), 18, "P5", "fee amount")
     if main.value != value:
         _fail("P5", "the main call sends another native value")
+    referral = REFERRAL.get(selector)
+    if referral is not None:
+        referrer = _word_address(main.data, referral[0], "P5", "referrer")
+        bps = _word_int(main.data, referral[1], "P5", "referral fee")
+        same_chain = selector in SAME_CHAIN
+        free_bps = REFERRAL_BPS["sameChainBps" if same_chain else "stablecoinBps"]
+        free = (ZERO_ADDRESS, int(free_bps))
+        house = (chain.house_referrer, int(REFERRAL_BPS["crossChainBps"]))
+        dst = _lookup(to_chain)
+        receive = body.get("receive")
+        shown = receive.get("token") if isinstance(receive, dict) else None
+        buy: Any = req.get("buyToken")
+        if isinstance(shown, str) and ADDRESS.fullmatch(shown):
+            token_out: str | None = shown.lower()
+        elif isinstance(buy, str) and ADDRESS.fullmatch(buy):
+            token_out = buy.lower()
+        elif dst is None:
+            token_out = None
+        else:
+            token_out = dst.symbols.get(buy.strip(JS_SPACE).lower())
+        if same_chain:
+            allowed = [free]
+        elif token not in chain.stablecoins:
+            allowed = [house]
+        elif token_out is None:
+            allowed = [free, house]
+        else:
+            stable_out = dst is not None and token_out in dst.stablecoins
+            allowed = [free if stable_out else house]
+        if (referrer, bps) not in allowed:
+            _fail("P5", "the referral fee goes to another address or has another size")
 
     at("P6")
     recipient = (

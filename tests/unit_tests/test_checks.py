@@ -62,7 +62,7 @@ def test_vectors_cover_every_rule_live_probes_and_the_table_version() -> None:
     rules = {v["expect"]["rule"] for v in VECTORS if v["expect"]["result"] == "fail"}
     assert sorted(rules) == RULES
     assert len([v for v in VECTORS if v["name"].startswith("live ")]) >= 30
-    assert len(VECTORS) == 214
+    assert len(VECTORS) == 225
     assert FILE["allowlistVersion"] == ALLOWLIST["version"]
 
 
@@ -77,6 +77,10 @@ NEGATIVES = [
     ("attacker spender", "P3: call 0 approves another spender"),
     ("main call spends another token", "P4: the main call spends another token"),
     ("extra value", "P5: the main call sends another native value"),
+    (
+        "same-chain attacker referrer at the 100 bps cap",
+        "P5: the referral fee goes to another address or has another size",
+    ),
     ("recipient swapped in a swap", "P6: the swap pays another recipient"),
     ("wrong verifyingContract", "G1: the authorization is for another token"),
     ("gas recipient swapped", "G2: the order pays another recipient"),
@@ -444,3 +448,10 @@ def test_an_address_with_a_trailing_newline_is_not_an_address() -> None:
     body["send"]["token"] += "\n"
     r = check_plan_swap(PLAN["request"], body)
     assert r == CheckResult(False, "P3", "P3: send.token is not an address")
+
+
+def test_a_stablecoin_sell_to_an_unpinned_token_may_carry_no_referrer() -> None:
+    v = by_name("live plan-8453-usdc-x42161-recipient")
+    v["response"]["receive"].pop("token", None)
+    request = {**v["request"], "buyToken": "SOMECOIN"}
+    assert check_plan_swap(request, v["response"]) == CheckResult(True)
