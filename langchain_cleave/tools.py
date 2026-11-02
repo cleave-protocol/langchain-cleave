@@ -26,8 +26,11 @@ from langchain_cleave._api import CleaveAPIError, CleaveAPIWrapper, refusal_body
 from langchain_cleave._checks import (
     CheckResult,
     address_refusal,
+    api_refusal,
     check_get_gas,
     check_plan_swap,
+    keep_gas,
+    keep_plan,
 )
 
 
@@ -172,13 +175,22 @@ def refusal_content(error: ToolException) -> str:
     return str(error)
 
 
-def checked(answer: dict[str, Any], check: Callable[[], CheckResult]) -> dict[str, Any]:
-    if isinstance(answer.get("error"), dict):
-        return answer
+def screened(
+    answer: dict[str, Any],
+    check: Callable[[], CheckResult],
+    keep: Callable[[], dict[str, Any]],
+) -> dict[str, Any]:
+    refusal = api_refusal(answer)
+    if refusal is not None:
+        return refusal
     result = check()
-    if result.ok:
-        return answer
-    raise CleaveAPIError(None, address_refusal(str(result.message)))
+    if not result.ok:
+        raise CleaveAPIError(None, address_refusal(str(result.message)))
+    return keep()
+
+
+def api_error(err: CleaveAPIError) -> CleaveAPIError:
+    return CleaveAPIError(err.status, api_refusal(err.body) or err.body)
 
 
 def invalid_param_content(error: ValidationError) -> str:
@@ -236,16 +248,30 @@ class CleavePlanSwap(_CleaveTool):
         run_manager: CallbackManagerForToolRun | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        answer = super()._run(run_manager=run_manager, **kwargs)
-        return checked(answer, lambda: check_plan_swap(kwargs, answer))
+        try:
+            answer = super()._run(run_manager=run_manager, **kwargs)
+        except CleaveAPIError as err:
+            raise api_error(err) from err
+        return screened(
+            answer,
+            lambda: check_plan_swap(kwargs, answer),
+            lambda: keep_plan(answer),
+        )
 
     async def _arun(
         self,
         run_manager: AsyncCallbackManagerForToolRun | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        answer = await super()._arun(run_manager=run_manager, **kwargs)
-        return checked(answer, lambda: check_plan_swap(kwargs, answer))
+        try:
+            answer = await super()._arun(run_manager=run_manager, **kwargs)
+        except CleaveAPIError as err:
+            raise api_error(err) from err
+        return screened(
+            answer,
+            lambda: check_plan_swap(kwargs, answer),
+            lambda: keep_plan(answer),
+        )
 
 
 class CleaveTrackSwap(_CleaveTool):
@@ -358,9 +384,13 @@ class CleaveGetGas(_CleaveTool):
         except CleaveAPIError as err:
             if offer is not None and self._ambiguous(err):
                 raise self._unknown(offer, err) from err
-            raise
+            raise api_error(err) from err
+        answer = screened(
+            answer,
+            lambda: check_get_gas(kwargs, answer),
+            lambda: keep_gas(kwargs, answer),
+        )
         if offer is None:
-            answer = checked(answer, lambda: check_get_gas(kwargs, answer))
             self._remember(answer)
         return answer
 
@@ -376,8 +406,12 @@ class CleaveGetGas(_CleaveTool):
         except CleaveAPIError as err:
             if offer is not None and self._ambiguous(err):
                 raise self._unknown(offer, err) from err
-            raise
+            raise api_error(err) from err
+        answer = screened(
+            answer,
+            lambda: check_get_gas(kwargs, answer),
+            lambda: keep_gas(kwargs, answer),
+        )
         if offer is None:
-            answer = checked(answer, lambda: check_get_gas(kwargs, answer))
             self._remember(answer)
         return answer

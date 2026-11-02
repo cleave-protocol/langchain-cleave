@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from langchain_cleave._allowlist import ALLOWLIST
 from langchain_cleave._api import refusal_body
 
-CheckRule = Literal["P1", "P2", "P3", "P4", "P5", "P6", "G1", "G2", "G3", "G4", "G5"]
+CheckRule = Literal["P1", "P2", "P3", "P4", "P5", "P6", "G1", "G2", "G3", "G4"]
 
 
 @dataclass(frozen=True)
@@ -25,6 +25,13 @@ class CheckResult:
 class _GasPay:
     router_v3: str
     across_usdc_adapter: str
+    rail_id: str
+
+
+@dataclass(frozen=True)
+class _Target:
+    role: str
+    selectors: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -32,11 +39,13 @@ class _Chain:
     usdc: str
     usdc_decimals: int
     wrapped_native: str
+    symbols: dict[str, str]
     composer: str
     delivery_shell: str
     gas_pay: _GasPay | None
-    targets: dict[str, frozenset[str]]
+    targets: dict[str, _Target]
     spoke_pool: str | None
+    lanes: dict[int, dict[str, int]]
 
 
 @dataclass(frozen=True)
@@ -57,7 +66,12 @@ class _Call:
 class _Pulls:
     token: int
     pulled: tuple[int, ...]
-    amount_in: int
+
+
+NATIVE = ALLOWLIST["nativeSentinel"].lower()
+HANDLER = ALLOWLIST["acrossHandler"].lower()
+FACTORY = ALLOWLIST["gas"]["factory"].lower()
+FEE_RECIPIENT = ALLOWLIST["gas"]["feeRecipient"].lower()
 
 
 def _chain(entry: dict[str, Any]) -> _Chain:
@@ -67,16 +81,32 @@ def _chain(entry: dict[str, Any]) -> _Chain:
         usdc=entry["usdc"].lower(),
         usdc_decimals=entry["usdcDecimals"],
         wrapped_native=entry["wrappedNative"].lower(),
+        symbols={
+            "usdc": entry["usdc"].lower(),
+            entry["nativeSymbol"].lower(): NATIVE,
+            entry["wrappedSymbol"].lower(): entry["wrappedNative"].lower(),
+        },
         composer=entry["composer"].lower(),
         delivery_shell=entry["gasDeliveryShell"].lower(),
         gas_pay=None
         if pay is None
-        else _GasPay(pay["routerV3"].lower(), pay["acrossUsdcAdapter"].lower()),
-        targets={a.lower(): frozenset(t["selectors"]) for a, t in targets.items()},
+        else _GasPay(
+            pay["routerV3"].lower(),
+            pay["acrossUsdcAdapter"].lower(),
+            pay["railId"].lower(),
+        ),
+        targets={
+            a.lower(): _Target(t["role"], frozenset(t["selectors"]))
+            for a, t in targets.items()
+        },
         spoke_pool=next(
             (a.lower() for a, t in targets.items() if t["role"] == "across_spoke_pool"),
             None,
         ),
+        lanes={
+            int(to): {r.lower(): int(d) for r, d in rails.items()}
+            for to, rails in entry["lanes"].items()
+        },
     )
 
 
@@ -89,12 +119,10 @@ def _gas_kind(entry: dict[str, Any]) -> _GasKind:
 
 
 CHAINS = {int(k): _chain(v) for k, v in ALLOWLIST["chains"].items()}
-NATIVE = ALLOWLIST["nativeSentinel"].lower()
-HANDLER = ALLOWLIST["acrossHandler"].lower()
-FACTORY = ALLOWLIST["gas"]["factory"].lower()
 GAS_SWAP = _gas_kind(ALLOWLIST["gas"]["swap"])
 GAS_CROSS_CHAIN = _gas_kind(ALLOWLIST["gas"]["cross_chain"])
 MAX_UINT = (1 << 256) - 1
+HALF_UINT = 1 << 255
 MAX_SAFE_INTEGER = (1 << 53) - 1
 ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
 HEX_DATA = re.compile(r"0x(?:[0-9a-fA-F]{2})*")
@@ -102,6 +130,10 @@ HEX_QUANTITY = re.compile(r"0x[0-9a-fA-F]{1,64}")
 BYTES32 = re.compile(r"0x[0-9a-fA-F]{64}")
 DECIMAL_INT = re.compile(r"[0-9]{1,78}")
 DECIMAL = re.compile(r"([0-9]{1,30})(?:\.([0-9]{1,30}))?")
+JS_SPACE = (
+    "\t\n\v\f\r \u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006"
+    "\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+)
 
 APPROVE = "0x095ea7b3"
 SWAP = "0xab33b1ec"
@@ -114,12 +146,32 @@ WITHDRAW = "0x2e1a7d4d"
 SPOKE_DEPOSIT = "0xad5425c6"
 DEPOSIT_NATIVE = "0x609ea081"
 
+SAME_CHAIN = frozenset({SWAP, MEASURED, DEPOSIT, WITHDRAW})
 PULLS = {
-    SWAP: _Pulls(0, (2,), 2),
-    MEASURED: _Pulls(0, (9,), 2),
-    CROSS: _Pulls(0, (2, 9), 2),
-    BRIDGE: _Pulls(0, (1,), 1),
-    SPOKE_DEPOSIT: _Pulls(2, (4,), 4),
+    SWAP: _Pulls(0, (2,)),
+    MEASURED: _Pulls(0, (9,)),
+    CROSS: _Pulls(0, (2, 9)),
+    BRIDGE: _Pulls(0, (1,)),
+    SPOKE_DEPOSIT: _Pulls(2, (4,)),
+}
+AMOUNT_IN = {
+    SWAP: 2,
+    MEASURED: 2,
+    CROSS: 2,
+    CROSS_NATIVE: 2,
+    BRIDGE: 1,
+    SPOKE_DEPOSIT: 4,
+    DEPOSIT_NATIVE: 4,
+    WITHDRAW: 0,
+}
+MIN_OUT = {
+    SWAP: (3,),
+    MEASURED: (3, 10),
+    CROSS: (3, 16),
+    CROSS_NATIVE: (3, 16),
+    BRIDGE: (6,),
+    SPOKE_DEPOSIT: (5,),
+    DEPOSIT_NATIVE: (6,),
 }
 
 FieldType = Literal["uint", "uint8", "address", "bytes32"]
@@ -272,6 +324,14 @@ def _units(v: Any, decimals: int, rule: CheckRule, what: str) -> int:
     return int(m.group(1)) * 10**decimals + int(frac.ljust(decimals, "0") or "0")
 
 
+def _normal_decimal(v: Any, rule: CheckRule, what: str) -> str:
+    m = DECIMAL.fullmatch(v) if isinstance(v, str) else None
+    if m is None:
+        _fail(rule, f"{what} is not a decimal amount")
+    frac = (m.group(2) or "").rstrip("0")
+    return str(int(m.group(1))) + ("." + frac if frac else "")
+
+
 def _word(data: str, k: int, rule: CheckRule, what: str) -> str:
     w = data[10 + 64 * k : 74 + 64 * k]
     if len(w) == 64:
@@ -298,6 +358,17 @@ def _same_chain(v: Any, chain_id: Any) -> bool:
     return False
 
 
+def _lane(chain: _Chain, to_chain: Any) -> dict[str, int] | None:
+    return chain.lanes.get(to_chain) if _is_number(to_chain) else None
+
+
+def _to_dst(amount: int, source: int, target: int) -> int:
+    if target >= source:
+        return amount * 10 ** (target - source)
+    quotient = abs(amount) // 10 ** (source - target)
+    return quotient if amount >= 0 else -quotient
+
+
 def _keccak(hex_text: str) -> str:
     data = bytes.fromhex(hex_text[2:])
     return "0x" + keccak.new(digest_bits=256, data=data).hexdigest()
@@ -318,8 +389,8 @@ def _call(raw: Any, i: int, from_chain: Any, wallet: str) -> _Call:
 
 def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
     at("P1")
-    from_chain = req.get("fromChainId")
-    to_chain = req.get("toChainId", from_chain)
+    from_chain: Any = req.get("fromChainId")
+    to_chain: Any = req.get("toChainId", from_chain)
     wallet = _address(req.get("wallet"), "P1", "wallet")
     calls = body.get("calls")
     if not isinstance(calls, list):
@@ -338,20 +409,30 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
     chain = _lookup(from_chain)
     if chain is None:
         _fail("P2", "the chain is not on the allowlist")
-    allowed = chain.targets.get(main.to)
-    if allowed is None:
+    target = chain.targets.get(main.to)
+    if target is None:
         _fail("P2", "the main call's target is not on the allowlist")
-    if selector not in allowed:
+    if selector not in target.selectors:
         _fail("P2", "the main call's function is not allowed on its target")
+    if (selector in SAME_CHAIN) != _same(to_chain, from_chain):
+        _fail("P2", "the main call does not fit the route")
 
     at("P3")
     send = _object(body.get("send"), "P3", "send")
     if not _same_chain(send.get("chainId"), from_chain):
         _fail("P3", "send is on another chain")
     token = _address(send.get("token"), "P3", "send.token")
-    sell = req.get("sellToken")
-    if isinstance(sell, str) and ADDRESS.fullmatch(sell) and sell.lower() != token:
+    sell: Any = req.get("sellToken")
+    if isinstance(sell, str) and ADDRESS.fullmatch(sell):
+        pinned: str | None = sell.lower()
+    else:
+        pinned = chain.symbols.get(sell.strip(JS_SPACE).lower())
+    if pinned is not None and pinned != token:
         _fail("P3", "send.token is not the sell token")
+    if _normal_decimal(send.get("amount"), "P3", "send.amount") != _normal_decimal(
+        req.get("amount"), "P3", "amount"
+    ):
+        _fail("P3", "send.amount is not the requested amount")
     native = token == NATIVE
     approves = parsed[:-1]
     if len(approves) > 2:
@@ -365,7 +446,7 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
         if _word_address(a.data, 0, "P3", "spender") != main.to:
             _fail("P3", f"call {i} approves another spender")
         amount = _word_int(a.data, 1, "P3", "approve amount")
-        if amount == MAX_UINT:
+        if amount >= HALF_UINT:
             _fail("P3", f"call {i} is an unlimited approve")
         approved.append(amount)
     last = approved[-1] if approved else None
@@ -388,8 +469,25 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
             pulled = max(_word_int(main.data, k, "P4", "amount") for k in pulls.pulled)
             if pulled != last:
                 _fail("P4", "the main call pulls another amount than approved")
-            if pulled > 2 * _word_int(main.data, pulls.amount_in, "P4", "amountIn"):
+            if pulled > 2 * _word_int(main.data, AMOUNT_IN[selector], "P4", "amountIn"):
                 _fail("P4", "the main call pulls more than twice its input")
+    if native or token == chain.wrapped_native:
+        decimals: int | None = 18
+    elif token == chain.usdc:
+        decimals = chain.usdc_decimals
+    else:
+        decimals = None
+    in_word = AMOUNT_IN.get(selector)
+    if (
+        decimals is not None
+        and in_word is not None
+        and _word_int(main.data, in_word, "P4", "amountIn")
+        != _units(req.get("amount"), decimals, "P4", "amount")
+    ):
+        _fail("P4", "the main call sells another amount than requested")
+    for k in MIN_OUT.get(selector, ()):
+        if _word_int(main.data, k, "P4", "minimum") == 0:
+            _fail("P4", "the main call has no minimum")
 
     at("P5")
     fees = body.get("fees", [])
@@ -398,8 +496,11 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
     value = _units(send.get("amount"), 18, "P5", "send.amount") if native else 0
     for f in fees:
         fee = _object(f, "P5", "fee")
-        if fee.get("kind") == "native_messaging":
-            value += _units(fee.get("amount"), 18, "P5", "fee amount")
+        if fee.get("kind") != "native_messaging":
+            continue
+        if target.role != "router_v3":
+            _fail("P5", "only the router takes a native messaging fee")
+        value += _units(fee.get("amount"), 18, "P5", "fee amount")
     if main.value != value:
         _fail("P5", "the main call sends another native value")
 
@@ -407,14 +508,27 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
     recipient = (
         _address(req["recipient"], "P6", "recipient") if "recipient" in req else wallet
     )
-    destination = None if _same(to_chain, from_chain) else _lookup(to_chain)
-    composer = None if destination is None else destination.composer
+    arrival = None if _same(to_chain, from_chain) else _lookup(to_chain)
+    composer = None if arrival is None else arrival.composer
 
     def arrives(a: str) -> bool:
         return a in (recipient, HANDLER, composer)
 
     def at6(k: int, what: str) -> str:
         return _word_address(main.data, k, "P6", what)
+
+    def lane(rail_word: int, dst_word: int) -> None:
+        rails = _lane(chain, to_chain)
+        rail = "0x" + _word(main.data, rail_word, "P6", "railId")
+        dst_id = None if rails is None else rails.get(rail)
+        if dst_id is None or _word_int(main.data, dst_word, "P6", "destination") != (
+            dst_id
+        ):
+            _fail("P6", "the transfer goes to another chain")
+
+    def destination(k: int) -> None:
+        if _word_int(main.data, k, "P6", "destination") != int(to_chain):
+            _fail("P6", "the transfer goes to another chain")
 
     if selector in (SWAP, MEASURED):
         if at6(5, "recipient") != recipient:
@@ -426,16 +540,19 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
             _fail("P6", "the transfer pays another recipient")
         if at6(15, "refund recipient") != wallet:
             _fail("P6", "refunds go to another address")
+        lane(12, 13)
     elif selector == BRIDGE:
         if not arrives(at6(4, "recipient")):
             _fail("P6", "the transfer pays another recipient")
         if at6(5, "refund recipient") != wallet:
             _fail("P6", "refunds go to another address")
+        lane(2, 3)
     elif selector == SPOKE_DEPOSIT:
         if at6(0, "depositor") != wallet:
             _fail("P6", "refunds go to another address")
         if at6(1, "recipient") not in (recipient, HANDLER):
             _fail("P6", "the transfer pays another recipient")
+        destination(6)
     elif selector == DEPOSIT_NATIVE:
         if at6(0, "spoke pool") != chain.spoke_pool:
             _fail("P6", "the deposit goes to another pool")
@@ -443,6 +560,7 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
             _fail("P6", "refunds go to another address")
         if at6(2, "recipient") not in (recipient, HANDLER):
             _fail("P6", "the transfer pays another recipient")
+        destination(7)
     elif selector in (DEPOSIT, WITHDRAW):
         if recipient != wallet:
             _fail("P6", "wrapping pays the wallet, not the recipient")
@@ -470,20 +588,8 @@ def _encode_order(
     return "".join(words)
 
 
-def _gas(
-    req: dict[str, Any],
-    body: Mapping[str, Any],
-    phase1_pay_to: str | None,
-    at: _Step,
-) -> None:
+def _gas(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
     if "offer" in req:
-        at("G5")
-        if (
-            phase1_pay_to is not None
-            and "payTo" in body
-            and _address(body["payTo"], "G5", "payTo") != phase1_pay_to.lower()
-        ):
-            _fail("G5", "the order pays another address than the offer")
         return
 
     at("G1")
@@ -499,6 +605,8 @@ def _gas(
     gas_pay = pay.gas_pay
     usdc = pay.usdc
     wallet = _address(req["wallet"], "G1", "wallet") if "wallet" in req else None
+    if wallet is not None and "typedData" not in body:
+        _fail("G1", "the offer has no authorization to sign")
     typed = (
         _object(body["typedData"], "G1", "typedData") if "typedData" in body else None
     )
@@ -548,6 +656,10 @@ def _gas(
         and _integer(message.get("value"), "G2", "message.value") != amount
     ):
         _fail("G2", "the authorization moves another amount")
+    if message is not None and _integer(
+        message.get("validBefore"), "G2", "validBefore"
+    ) > _integer(order.get("deadline"), "G2", "order.deadline"):
+        _fail("G2", "the authorization outlives the order")
     if _integer(order.get("chainId"), "G2", "order.chainId") != int(pay_chain_id):
         _fail("G2", "the order is on another chain")
     if _address(order.get("token"), "G2", "order.token") != usdc:
@@ -566,6 +678,30 @@ def _gas(
         _fail("G2", "the order has no refund address")
     if _address(order.get("refundTo"), "G2", "order.refundTo") != refund_to:
         _fail("G2", "the order refunds another address")
+    fee = _integer(order.get("fee"), "G2", "order.fee")
+    if fee >= amount:
+        _fail("G2", "the fee takes the whole amount")
+    shown_fee = _object(body.get("fee"), "G2", "fee").get("usdc")
+    if fee != _units(shown_fee, pay.usdc_decimals, "G2", "fee.usdc"):
+        _fail("G2", "the order fee is not the fee shown")
+    min_out = _integer(order.get("minOut"), "G2", "order.minOut")
+    if min_out == 0 or min_out != _integer(
+        _object(body.get("receive"), "G2", "receive").get("minimumWei"),
+        "G2",
+        "receive.minimumWei",
+    ):
+        _fail("G2", "the order minimum is not the minimum shown")
+    dst = _lookup(chain_id)
+    if dst is None:
+        _fail("G2", "the delivery chain is not on the allowlist")
+    if not swap:
+        relay_fee = _integer(order.get("relayFee"), "G2", "order.relayFee")
+        if relay_fee * 2 > amount - fee:
+            _fail("G2", "the relay fee is above half the amount")
+        output = _integer(order.get("outputAmount"), "G2", "order.outputAmount")
+        net = amount - fee - relay_fee
+        if output != _to_dst(net, pay.usdc_decimals, dst.usdc_decimals):
+            _fail("G2", "the bridged amount is not the amount after fees")
 
     at("G3")
     if body.get("kind") != ("swap" if swap else "cross_chain"):
@@ -574,9 +710,6 @@ def _gas(
         body.get("chainId"), chain_id
     ):
         _fail("G3", "the offer is for other chains")
-    dst = _lookup(chain_id)
-    if dst is None:
-        _fail("G3", "the delivery chain is not on the allowlist")
     spec = GAS_SWAP if swap else GAS_CROSS_CHAIN
     if _address(body.get("factory"), "G3", "factory") != FACTORY:
         _fail("G3", "the factory is not the pinned one")
@@ -587,6 +720,9 @@ def _gas(
         if _address(order.get(name), "G3", f"order.{name}") != want:
             _fail("G3", f"order.{name} is not the pinned one")
 
+    pinned("feeRecipient", FEE_RECIPIENT)
+    if _integer(order.get("maxProtocolFeeBps"), "G3", "order.maxProtocolFeeBps") != 0:
+        _fail("G3", "the order allows a protocol fee")
     if swap:
         pinned("shell", dst.delivery_shell)
     else:
@@ -596,6 +732,10 @@ def _gas(
         pinned("dstToken", dst.usdc)
         pinned("dstShell", dst.delivery_shell)
         pinned("dstWrappedNative", dst.wrapped_native)
+        rail_id = _bytes32(order.get("railId"), "G3", "order.railId")
+        rails = _lane(pay, chain_id)
+        if rail_id != gas_pay.rail_id or rails is None or rail_id not in rails:
+            _fail("G3", "order.railId is not the pinned one")
         if _integer(order.get("dstChainId"), "G3", "order.dstChainId") != int(chain_id):
             _fail("G3", "the order delivers on another chain")
         if _integer(order.get("dstDecimals"), "G3", "order.dstDecimals") != (
@@ -626,12 +766,130 @@ def check_plan_swap(
 
 
 def check_get_gas(
-    request: Mapping[str, Any] | BaseModel,
-    body: Mapping[str, Any],
-    phase1_pay_to: str | None = None,
+    request: Mapping[str, Any] | BaseModel, body: Mapping[str, Any]
 ) -> CheckResult:
-    return _guard(lambda at: _gas(_request(request), body, phase1_pay_to, at))
+    return _guard(lambda at: _gas(_request(request), body, at))
+
+
+PLAN_KEYS = (
+    "requestId",
+    "blocked",
+    "requiresConfirmation",
+    "route",
+    "send",
+    "pullsAtMost",
+    "receive",
+    "fees",
+    "notices",
+    "quotedAt",
+    "validUntil",
+    "calls",
+    "next",
+)
+CALL_KEYS = ("chainId", "from", "to", "data", "value")
+OFFER_KEYS = (
+    "offer",
+    "kind",
+    "payChainId",
+    "chainId",
+    "payTo",
+    "factory",
+    "template",
+    "order",
+    "blob",
+    "hubs",
+    "message",
+    "orderHash",
+    "outcome",
+    "pay",
+    "fee",
+    "receive",
+    "deadline",
+    "refundTo",
+    "typedData",
+    "etaSec",
+    "verify",
+)
+SUBMIT_KEYS = ("requestId", "state", "payTo", "deadline")
+ERROR_KEYS = (
+    "code",
+    "reason",
+    "message",
+    "detail",
+    "retryable",
+    "retryAfterSec",
+    "suggestion",
+    "notices",
+)
+DOMAIN_KEYS = ("name", "version", "chainId", "verifyingContract")
+MESSAGE_KEYS = tuple(name for name, _ in AUTH_FIELDS)
+
+
+def _pick(source: Mapping[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    return {k: source[k] for k in keys if k in source}
+
+
+def api_refusal(body: Mapping[str, Any]) -> dict[str, Any] | None:
+    error = body.get("error")
+    if not isinstance(error, dict):
+        return None
+    return {
+        **_pick(body, ("apiVersion", "requestId")),
+        "error": _pick(error, ERROR_KEYS),
+    }
 
 
 def address_refusal(message: str) -> dict[str, Any]:
     return refusal_body("address_not_allowed", message, False)
+
+
+def keep_plan(body: Mapping[str, Any]) -> dict[str, Any]:
+    out = _pick(body, PLAN_KEYS)
+    out["calls"] = [_pick(c, CALL_KEYS) for c in body["calls"]]
+    return out
+
+
+def keep_gas(
+    request: Mapping[str, Any] | BaseModel, body: Mapping[str, Any]
+) -> dict[str, Any]:
+    if "offer" in _request(request):
+        return _pick(body, SUBMIT_KEYS)
+    out = _pick(body, OFFER_KEYS)
+    typed = body.get("typedData")
+    if isinstance(typed, dict):
+        out["typedData"] = {
+            "domain": _pick(typed["domain"], DOMAIN_KEYS),
+            "types": {
+                "ReceiveWithAuthorization": [
+                    _pick(f, ("name", "type"))
+                    for f in typed["types"]["ReceiveWithAuthorization"]
+                ]
+            },
+            "primaryType": typed["primaryType"],
+            "message": _pick(typed["message"], MESSAGE_KEYS),
+        }
+    return out
+
+
+def screen_plan_swap(
+    request: Mapping[str, Any] | BaseModel, body: Mapping[str, Any]
+) -> dict[str, Any]:
+    refusal = api_refusal(body)
+    if refusal is not None:
+        return refusal
+    result = check_plan_swap(request, body)
+    if not result.ok:
+        return address_refusal(str(result.message))
+    return keep_plan(body)
+
+
+def screen_get_gas(
+    request: Mapping[str, Any] | BaseModel, body: Mapping[str, Any]
+) -> dict[str, Any]:
+    refusal = api_refusal(body)
+    if refusal is not None:
+        return refusal
+    result = check_get_gas(request, body)
+    if not result.ok:
+        return address_refusal(str(result.message))
+    return keep_gas(request, body)

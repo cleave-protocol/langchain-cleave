@@ -21,11 +21,12 @@ from langchain_cleave import (
     check_plan_swap,
 )
 from langchain_cleave._allowlist import ALLOWLIST
+from langchain_cleave._checks import screen_get_gas, screen_plan_swap
 
 FIXTURES = Path(__file__).parent / "fixtures"
 FILE = json.loads((FIXTURES / "vectors.json").read_text(encoding="utf-8"))
 VECTORS: list[dict[str, Any]] = FILE["vectors"]
-RULES = ["G1", "G2", "G3", "G4", "G5", "P1", "P2", "P3", "P4", "P5", "P6"]
+RULES = ["G1", "G2", "G3", "G4", "P1", "P2", "P3", "P4", "P5", "P6"]
 
 
 def by_name(name: str) -> dict[str, Any]:
@@ -35,26 +36,33 @@ def by_name(name: str) -> dict[str, Any]:
 def run_check(v: dict[str, Any]) -> CheckResult:
     if v["tool"] == "plan_swap":
         return check_plan_swap(v["request"], v["response"])
-    pay_to = v.get("context", {}).get("phase1PayTo")
-    return check_get_gas(v["request"], v["response"], pay_to)
+    return check_get_gas(v["request"], v["response"])
 
 
-def verdict(v: dict[str, Any]) -> dict[str, str]:
-    if isinstance(v["response"].get("error"), dict):
-        return {"result": "pass"}
-    r = run_check(v)
-    if r.ok:
-        return {"result": "pass"}
-    assert r.message is not None
-    assert "malformed" not in r.message
-    return {"result": "fail", "rule": str(r.rule)}
+def screen(v: dict[str, Any]) -> dict[str, Any]:
+    if v["tool"] == "plan_swap":
+        return screen_plan_swap(v["request"], v["response"])
+    return screen_get_gas(v["request"], v["response"])
+
+
+def verdict(v: dict[str, Any]) -> dict[str, Any]:
+    out = screen(v)
+    error = out.get("error")
+    if isinstance(error, dict) and error.get("code") == "address_not_allowed":
+        assert isinstance(error["message"], str)
+        assert "malformed" not in error["message"]
+        assert list(out) == ["error"]
+        return {"result": "fail", "rule": error["message"][:2]}
+    if v["expect"]["result"] == "pass" and "output" in v["expect"]:
+        return {"result": "pass", "output": out}
+    return {"result": "pass"}
 
 
 def test_vectors_cover_every_rule_live_probes_and_the_table_version() -> None:
     rules = {v["expect"]["rule"] for v in VECTORS if v["expect"]["result"] == "fail"}
     assert sorted(rules) == RULES
     assert len([v for v in VECTORS if v["name"].startswith("live ")]) >= 30
-    assert len(VECTORS) == 127
+    assert len(VECTORS) == 214
     assert FILE["allowlistVersion"] == ALLOWLIST["version"]
 
 
@@ -74,10 +82,6 @@ NEGATIVES = [
     ("gas recipient swapped", "G2: the order pays another recipient"),
     ("gas router swapped", "G3: order.router is not the pinned one"),
     ("gas message.to swapped", "G4: the authorization pays another address"),
-    (
-        "phase 2 payTo differs from the phase-1 payTo",
-        "G5: the order pays another address than the offer",
-    ),
 ]
 
 
@@ -89,19 +93,16 @@ def test_one_negative_per_rule_names_its_reason(name: str, message: str) -> None
     assert (r.ok, r.rule, r.message) == (False, message[:2], message)
 
 
-def npm_allowlist() -> Any:
-    text = (FIXTURES / "allowlist.ts").read_text(encoding="utf-8")
-    prefix, suffix = "export const ALLOWLIST = ", " as const;\n"
-    assert text.startswith(prefix) and text.endswith(suffix)
-    return json.loads(text[len(prefix) : -len(suffix)])
+def pinned_table() -> Any:
+    return json.loads((FIXTURES / "allowlist-pinned.json").read_text(encoding="utf-8"))
 
 
 def keccak_hex(data: bytes) -> str:
     return "0x" + keccak.new(digest_bits=256, data=data).hexdigest()
 
 
-def test_pinned_table_equals_the_npm_copy() -> None:
-    assert npm_allowlist() == ALLOWLIST
+def test_pinned_table_equals_the_shared_table() -> None:
+    assert pinned_table() == ALLOWLIST
 
 
 def test_init_code_hashes_recompute_from_the_templates() -> None:
@@ -150,6 +151,24 @@ def test_each_selector_is_named_after_its_function_signature() -> None:
                 assert keccak_hex(signature.encode())[:10] == selector, name
 
 
+ACROSS_RAILS = (
+    "0xf6c86ecb0564cd8d732c9d68c369fbc03a0c351db7419e70be166d26a2ed4916",
+    "0xa28bababc0e2b0c1c28d78d20a75d5ef0afd16dc155828d76a2bf6b97805d328",
+)
+
+
+def test_every_lane_has_its_rails_with_the_chain_id_as_across_destination() -> None:
+    chains = ALLOWLIST["chains"]
+    for source, chain in chains.items():
+        lanes = chain["lanes"]
+        assert sorted(lanes) == sorted(k for k in chains if k != source)
+        for to, rails in lanes.items():
+            for rail in ACROSS_RAILS:
+                assert rails[rail] == int(to), f"{source}>{to}"
+            if chain["gasPay"] is not None:
+                assert rails[chain["gasPay"]["railId"]] == int(to)
+
+
 def test_six_targets_on_every_chain_and_gas_payment_on_five() -> None:
     chains = ALLOWLIST["chains"]
     assert sorted(chains) == ["1", "10", "137", "42161", "56", "8453"]
@@ -191,6 +210,26 @@ async def test_plan_swap_returns_a_checked_plan_unchanged_async() -> None:
     v = by_name("live plan-8453-usdc-x42161-weth")
     api, _ = answering(v["response"])
     assert await CleavePlanSwap(api_wrapper=api).ainvoke(v["request"]) == v["response"]
+
+
+def test_plan_swap_keeps_only_the_documented_plan_fields() -> None:
+    v = by_name("extra call fields and top-level keys are dropped")
+    api, _ = answering(v["response"])
+    assert CleavePlanSwap(api_wrapper=api).invoke(v["request"]) == v["expect"]["output"]
+
+
+async def test_get_gas_keeps_only_the_documented_offer_fields_async() -> None:
+    v = by_name("extra offer keys and typed data fields are dropped")
+    api, _ = answering(v["response"])
+    tool = CleaveGetGas(api_wrapper=api)
+    assert await tool.ainvoke(v["request"]) == v["expect"]["output"]
+
+
+def test_get_gas_submission_keeps_only_its_four_fields() -> None:
+    v = by_name("phase 2 answer keeps its four fields")
+    api, _ = answering(v["response"])
+    tool = CleaveGetGas(api_wrapper=api, allow_relay=True)
+    assert tool.invoke(v["request"]) == v["expect"]["output"]
 
 
 def test_plan_swap_replaces_a_failing_plan_with_the_refusal_only() -> None:
@@ -266,13 +305,6 @@ async def test_get_gas_returns_a_checked_offer_unchanged_async() -> None:
     assert await CleaveGetGas(api_wrapper=api).ainvoke(v["request"]) == v["response"]
 
 
-def test_get_gas_submission_is_not_checked() -> None:
-    v = by_name("phase 2 payTo differs from the phase-1 payTo")
-    api, _ = answering(v["response"])
-    tool = CleaveGetGas(api_wrapper=api, allow_relay=True)
-    assert tool.invoke(v["request"]) == v["response"]
-
-
 def test_a_body_whose_error_member_is_not_an_object_is_checked() -> None:
     v = by_name("error member null with an attacker target")
     api, _ = answering(v["response"])
@@ -282,20 +314,61 @@ def test_a_body_whose_error_member_is_not_an_object_is_checked() -> None:
     )
 
 
+API_REFUSAL = {
+    "apiVersion": "1",
+    "requestId": "r-9",
+    "error": {
+        "code": "invalid_param",
+        "reason": "bad_amount",
+        "message": "x",
+        "retryable": False,
+        "extra": "dropped",
+    },
+    "calls": [{"to": "0x000000000000000000000000000000000000dEaD"}],
+    "typedData": {"message": {"to": "0x000000000000000000000000000000000000dEaD"}},
+}
+KEPT_REFUSAL = {
+    "apiVersion": "1",
+    "requestId": "r-9",
+    "error": {
+        "code": "invalid_param",
+        "reason": "bad_amount",
+        "message": "x",
+        "retryable": False,
+    },
+}
+
+
+def tool_args(cls: type[CleavePlanSwap] | type[CleaveGetGas]) -> dict[str, Any]:
+    name = "live plan-8453-same" if cls is CleavePlanSwap else "live gas-1-same"
+    return by_name(name)["request"]
+
+
 @pytest.mark.parametrize("cls", [CleavePlanSwap, CleaveGetGas])
-async def test_an_api_refusal_passes_through_unchecked(
+async def test_an_api_refusal_keeps_only_its_error_fields(
     cls: type[CleavePlanSwap] | type[CleaveGetGas],
 ) -> None:
-    body = {
-        "error": {"code": "invalid_param", "message": "x", "retryable": False},
-        "calls": [{"to": "0x000000000000000000000000000000000000dEaD"}],
-    }
-    args = by_name(
-        "live plan-8453-same" if cls is CleavePlanSwap else "live gas-1-same"
-    )["request"]
-    api, _ = answering(body)
-    assert cls(api_wrapper=api).invoke(args) == body
-    assert await cls(api_wrapper=api).ainvoke(args) == body
+    api, _ = answering(API_REFUSAL)
+    assert cls(api_wrapper=api).invoke(tool_args(cls)) == KEPT_REFUSAL
+    assert await cls(api_wrapper=api).ainvoke(tool_args(cls)) == KEPT_REFUSAL
+
+
+@pytest.mark.parametrize("cls", [CleavePlanSwap, CleaveGetGas])
+async def test_an_http_api_refusal_keeps_only_its_error_fields(
+    cls: type[CleavePlanSwap] | type[CleaveGetGas],
+) -> None:
+    transport = httpx.MockTransport(lambda r: httpx.Response(400, json=API_REFUSAL))
+    api = CleaveAPIWrapper(
+        client=httpx.Client(transport=transport),
+        async_client=httpx.AsyncClient(transport=transport),
+        api_key=None,
+    )
+    assert json.loads(cls(api_wrapper=api).invoke(tool_args(cls))) == KEPT_REFUSAL
+    tool = cls(api_wrapper=api, handle_tool_error=False)
+    with pytest.raises(CleaveAPIError) as caught:
+        await tool.ainvoke(tool_args(cls))
+    assert caught.value.status == 400
+    assert caught.value.body == KEPT_REFUSAL
 
 
 PLAN = by_name("live plan-8453-same")
@@ -307,7 +380,9 @@ def test_a_malformed_body_fails_closed() -> None:
     assert (bad.ok, bad.rule) == (False, "P1")
     empty = check_plan_swap(PLAN["request"], {"blocked": False, "calls": []})
     assert (empty.ok, empty.rule) == (False, "P1")
-    assert check_get_gas(gas, {}).rule == "G2"
+    assert check_get_gas(gas, {}).rule == "G1"
+    walletless = {k: v for k, v in gas.items() if k != "wallet"}
+    assert check_get_gas(walletless, {}).rule == "G2"
 
 
 def test_a_blocked_plan_without_calls_passes() -> None:
