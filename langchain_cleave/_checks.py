@@ -180,6 +180,8 @@ REFERRAL = {
     CROSS_NATIVE: (6, 7),
     BRIDGE: (7, 8),
 }
+ERC20_ONLY = frozenset({CROSS, BRIDGE, SPOKE_DEPOSIT, WITHDRAW})
+WETH_AS_ERC20 = {SWAP: 8, MEASURED: 8}
 NATIVE_TOKEN = {SWAP: 0, MEASURED: 0, CROSS: 0, CROSS_NATIVE: 0, DEPOSIT_NATIVE: 3}
 RAIL_WORD = {CROSS: 12, CROSS_NATIVE: 12, BRIDGE: 2}
 GAS_SKEW_SEC = 120
@@ -490,6 +492,20 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
             _fail("P4", "the main call pulls another amount than approved")
         if pulled > 2 * _word_int(main.data, AMOUNT_IN[selector], "P4", "amountIn"):
             _fail("P4", "the main call pulls more than twice its input")
+    if native and selector in ERC20_ONLY:
+        _fail("P4", "a native sell cannot use this function")
+    mode = WETH_AS_ERC20.get(selector)
+    if (
+        mode is not None
+        and native
+        and _word_int(main.data, mode, "P4", "native mode") != 0
+    ):
+        _fail("P4", "the main call spends the wrapped token, not the native coin")
+    if (
+        selector in (CROSS, CROSS_NATIVE)
+        and _word_int(main.data, 8, "P4", "native mode") != 1
+    ):
+        _fail("P4", "the router swap is not encoded as the backend encodes it")
     wrapped_word = NATIVE_TOKEN.get(selector)
     if (
         native
@@ -591,6 +607,28 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
         ):
             _fail("P6", "the transfer goes to another chain")
 
+    target_chain = _lookup(to_chain)
+    buy_token: Any = req.get("buyToken")
+    buy_token = buy_token.strip(JS_SPACE)
+    if ADDRESS.fullmatch(buy_token):
+        out: str | None = buy_token.lower()
+    else:
+        out = (
+            None
+            if target_chain is None
+            else target_chain.symbols.get(buy_token.lower())
+        )
+    if out is None:
+        out_word = None
+    elif out == NATIVE:
+        out_word = None if target_chain is None else target_chain.wrapped_native
+    else:
+        out_word = out
+
+    def output(k: int) -> None:
+        if out_word is not None and at6(k, "output token") != out_word:
+            _fail("P6", "the main call delivers another token")
+
     def destination(k: int) -> None:
         if _word_int(main.data, k, "P6", "destination") != int(to_chain):
             _fail("P6", "the transfer goes to another chain")
@@ -598,6 +636,15 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
     if selector in (SWAP, MEASURED):
         if at6(5, "recipient") != recipient:
             _fail("P6", "the swap pays another recipient")
+        output(1)
+        if not native:
+            flag = _word_int(main.data, 8, "P6", "native output")
+            if out is not None:
+                wrong = flag != (0 if out == NATIVE else 1)
+            else:
+                wrong = flag == 0 and at6(1, "output token") != chain.wrapped_native
+            if wrong:
+                _fail("P6", "the main call delivers another token")
     elif selector in (CROSS, CROSS_NATIVE):
         if at6(5, "source recipient") != main.to:
             _fail("P6", "the source swap pays out of the router")
@@ -618,6 +665,7 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
         if at6(1, "recipient") not in (recipient, HANDLER):
             _fail("P6", "the transfer pays another recipient")
         destination(6)
+        output(3)
     elif selector == DEPOSIT_NATIVE:
         if at6(0, "spoke pool") != chain.spoke_pool:
             _fail("P6", "the deposit goes to another pool")
@@ -626,9 +674,13 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
         if at6(2, "recipient") not in (recipient, HANDLER):
             _fail("P6", "the transfer pays another recipient")
         destination(7)
+        output(5)
     elif selector in (DEPOSIT, WITHDRAW):
         if recipient != wallet:
             _fail("P6", "wrapping pays the wallet, not the recipient")
+        wrapped = chain.wrapped_native if selector == DEPOSIT else NATIVE
+        if out is not None and out != wrapped:
+            _fail("P6", "the main call delivers another token")
     else:
         _fail("P6", "the main call has no recipient rule")
 

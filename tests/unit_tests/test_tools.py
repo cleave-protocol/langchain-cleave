@@ -815,13 +815,31 @@ REST_PLAN_EDITS = [
         "tokens only) bound every argument.",
         "The token to receive must be on Cleave's token list.",
     ),
+    (
+        "outcome kind (exact or at least a minimum;",
+        "outcome kind (an exact amount or one that can vary;",
+    ),
+]
+GAS_EDITS = [
+    (
+        "On one chain the recipient gets at least the minimum or nothing moves; from "
+        "another chain it gets the native coin at the minimum, else USDC on arrival if "
+        "the arrival swap fails.",
+        "On one chain the order swaps the USDC to the native coin for the recipient; "
+        "from another chain it bridges the USDC and swaps it on arrival, delivering "
+        "USDC instead if that swap fails.",
+    ),
 ]
 
 
 def test_descriptions_are_backend_texts() -> None:
     assert _descriptions.TRACK_SWAP == BACKEND_TEXTS["track_swap"]
     assert _descriptions.FIND_TOKEN == BACKEND_TEXTS["find_token"]
-    assert _descriptions.GET_GAS == BACKEND_TEXTS["get_gas"]
+    gas = BACKEND_TEXTS["get_gas"]
+    for old, new in GAS_EDITS:
+        assert gas.count(old) == 1
+        gas = gas.replace(old, new)
+    assert _descriptions.GET_GAS == gas
     plan = BACKEND_TEXTS["plan_swap"]
     for old, new in REST_PLAN_EDITS:
         assert plan.count(old) == 1
@@ -1007,3 +1025,26 @@ async def test_api_refusal_with_http_200_is_tool_content(
     message = await cls(api_wrapper=api).ainvoke(call(cls(), args))
     assert message.status == "error"
     assert json.loads(message.content) == REFUSAL
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "retryable"),
+    [
+        (500, {**PLAN_BODY, "error": None}, True),
+        (404, {"error": "nope"}, False),
+        (429, {}, True),
+    ],
+    ids=["error-null", "error-string", "no-error"],
+)
+def test_error_status_without_an_error_object_is_http_error(
+    status: int, body: dict, retryable: bool
+) -> None:
+    api, _ = mocked(answer(status, body))
+    content = json.loads(CleavePlanSwap(api_wrapper=api).invoke(PLAN["request"]))
+    assert content == {
+        "error": {
+            "code": "http_error",
+            "message": f"HTTP {status}",
+            "retryable": retryable,
+        }
+    }

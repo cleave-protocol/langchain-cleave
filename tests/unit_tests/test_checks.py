@@ -67,7 +67,7 @@ def test_vectors_cover_every_rule_live_probes_and_the_table_version() -> None:
     rules = {v["expect"]["rule"] for v in VECTORS if v["expect"]["result"] == "fail"}
     assert sorted(rules) == RULES
     assert len([v for v in VECTORS if v["name"].startswith("live ")]) >= 30
-    assert len(VECTORS) == 259
+    assert len(VECTORS) == 284
     assert FILE["allowlistVersion"] == ALLOWLIST["version"]
 
 
@@ -484,3 +484,11 @@ def test_a_padded_buy_symbol_is_pinned_after_trimming() -> None:
     assert (
         r.message == "P5: the referral fee goes to another address or has another size"
     )
+
+
+def test_a_padded_buy_symbol_is_tied_to_the_wrap_direction() -> None:
+    v = by_name("quote-derived quote-8453-wrap")
+    assert check_plan_swap(v["request"], v["response"]) == CheckResult(True)
+    request = {**v["request"], "buyToken": " ETH "}
+    r = check_plan_swap(request, v["response"])
+    assert r.message == "P6: the main call delivers another token"

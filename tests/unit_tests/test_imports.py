@@ -12,6 +12,8 @@ EXPECTED_ALL = [
     "CheckResult",
     "check_get_gas",
     "check_plan_swap",
+    "screen_get_gas",
+    "screen_plan_swap",
     "FindTokenInput",
     "GetGasInput",
     "PlanSwapInput",

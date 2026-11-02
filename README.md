@@ -185,13 +185,20 @@ What these checks do not cover:
   does not know its decimals, so the amount in the approve and the
   calldata is not checked against the request. Check the approve amount
   and `pullsAtMost` before signing.
+- The Stargate native messaging fee is the API's figure. The checks only
+  match it with the call's value; nothing bounds it.
 - `next` and the notices are text from the API.
 
 After Cleave redeploys a contract, plans that use it fail these checks
 until a package update pins the new address.
 
-`check_plan_swap` and `check_get_gas` are exported for agents that call the
-API directly. Each returns a `CheckResult` with `ok`, `rule` and `message`.
+Agents that call the API directly should pass each answer through
+`screen_plan_swap(request, body)` or `screen_get_gas(request, body)` and use
+only what they return: the refusal, or the answer cut to its documented
+fields. `check_plan_swap` and `check_get_gas` return only a verdict, a
+`CheckResult` with `ok`, `rule` and `message`; a pass from them does not
+make the original answer safe to forward, since it can carry fields the
+checks do not read.
 
 Do not pair these tools with a wallet that signs without a human looking.
 
@@ -304,6 +311,8 @@ is returned the same way whatever its HTTP status.
 Refusals made by the package itself have only `error`:
 
 - `network_error`: the request did not complete (retryable).
+- `http_error`: an error status whose body has no `error` object, with
+  nothing else from the body; `retryable` is true for 5xx and 429.
 - `invalid_param`: the input breaks the schema, such as an unsupported or
   boolean chain id, a malformed address or an explicit `null`. No request is
   sent; `detail` names each field. Omit an optional field instead of sending
