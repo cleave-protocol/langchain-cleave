@@ -23,6 +23,12 @@ from pydantic import (
 
 from langchain_cleave import _descriptions
 from langchain_cleave._api import CleaveAPIError, CleaveAPIWrapper, refusal_body
+from langchain_cleave._checks import (
+    CheckResult,
+    address_refusal,
+    check_get_gas,
+    check_plan_swap,
+)
 
 
 def _not_bool(value: Any) -> Any:
@@ -166,6 +172,15 @@ def refusal_content(error: ToolException) -> str:
     return str(error)
 
 
+def checked(answer: dict[str, Any], check: Callable[[], CheckResult]) -> dict[str, Any]:
+    if isinstance(answer.get("error"), dict):
+        return answer
+    result = check()
+    if result.ok:
+        return answer
+    raise CleaveAPIError(None, address_refusal(str(result.message)))
+
+
 def invalid_param_content(error: ValidationError) -> str:
     problems = []
     for e in error.errors():
@@ -215,6 +230,22 @@ class CleavePlanSwap(_CleaveTool):
     name: str = "cleave_plan_swap"
     description: str = _descriptions.PLAN_SWAP + PLAN_CONFIRM
     args_schema: type[BaseModel] = PlanSwapInput
+
+    def _run(
+        self,
+        run_manager: CallbackManagerForToolRun | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        answer = super()._run(run_manager=run_manager, **kwargs)
+        return checked(answer, lambda: check_plan_swap(kwargs, answer))
+
+    async def _arun(
+        self,
+        run_manager: AsyncCallbackManagerForToolRun | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        answer = await super()._arun(run_manager=run_manager, **kwargs)
+        return checked(answer, lambda: check_plan_swap(kwargs, answer))
 
 
 class CleaveTrackSwap(_CleaveTool):
@@ -329,6 +360,7 @@ class CleaveGetGas(_CleaveTool):
                 raise self._unknown(offer, err) from err
             raise
         if offer is None:
+            answer = checked(answer, lambda: check_get_gas(kwargs, answer))
             self._remember(answer)
         return answer
 
@@ -346,5 +378,6 @@ class CleaveGetGas(_CleaveTool):
                 raise self._unknown(offer, err) from err
             raise
         if offer is None:
+            answer = checked(answer, lambda: check_get_gas(kwargs, answer))
             self._remember(answer)
         return answer

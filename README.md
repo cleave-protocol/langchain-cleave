@@ -134,6 +134,49 @@ many tokens, the one the user means may not be among them: prefer a verified
 contract address. A search by symbol or name is limited to 48 characters
 after normalization, although the input schema accepts 64.
 
+## Address checks
+
+Before a `cleave_plan_swap` plan or a `cleave_get_gas` offer reaches the
+model, the package checks it against a per-chain list of contract addresses
+pinned in this package:
+
+- `cleave_plan_swap`: every call is on the planned chain and from the
+  wallet. The last call goes to a listed contract and function. Any call
+  before it is a plain, limited approve of the sell token to that contract.
+  The last call spends that token and amount, sends only the expected
+  native value, and pays the requested recipient where its calldata names
+  one; refunds go to the wallet.
+- `cleave_get_gas`: the authorization is a USDC `ReceiveWithAuthorization`
+  from the wallet on the paying chain. The order carries the requested
+  amount, recipient and refund address and the pinned contracts. The order
+  hash and the payment address are recomputed and must match what is
+  signed.
+
+A plan or offer that fails a check is not passed on; the tool returns only
+this refusal (see [Errors](#errors)):
+
+```json
+{
+  "error": {
+    "code": "address_not_allowed",
+    "message": "P2: the main call's target is not on the allowlist",
+    "retryable": false
+  }
+}
+```
+
+When a swap on arrival goes through the Across handler or Cleave's
+composer, the final recipient is inside the bridge message, which these
+checks do not read.
+
+After Cleave redeploys a contract, plans that use it fail these checks
+until a package update pins the new address.
+
+`check_plan_swap` and `check_get_gas` are exported for agents that call the
+API directly. Each returns a `CheckResult` with `ok`, `rule` and `message`.
+
+Do not pair these tools with a wallet that signs without a human looking.
+
 ## Gas top-ups
 
 `cleave_get_gas` takes two calls with separate fields; fields from one call
@@ -243,6 +286,8 @@ Refusals made by the package itself have only `error`:
   boolean chain id, a malformed address or an explicit `null`. No request is
   sent; `detail` names each field. Omit an optional field instead of sending
   `null`.
+- `address_not_allowed`: the answer failed a check, and nothing else from it
+  is returned; see [Address checks](#address-checks).
 - `relay_disabled` and `outcome_unknown`: see [Gas top-ups](#gas-top-ups).
 
 To raise instead, pass `handle_tool_error=False`. The tool then raises

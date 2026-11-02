@@ -38,25 +38,18 @@ WALLET = "0x00000000000000000000000000000000000A11cE"
 GAS_ID = "g:8453:0x" + "0" * 63 + "1"
 TX = "0x" + "ab" * 32
 
-PLAN_BODY = {
-    "requestId": "75a208eb-cba3-4fd4-ba17-d0eabbfd73b6",
-    "blocked": False,
-    "requiresConfirmation": True,
-    "route": {"class": "same_chain", "outcomeKind": "at_least"},
-    "receive": {"symbol": "WETH", "expected": "0.0109", "minimum": "0.0108"},
-    "fees": [],
-    "notices": [],
-    "validUntil": 1793623133,
-    "calls": [
-        {
-            "chainId": 8453,
-            "from": WALLET.lower(),
-            "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-            "data": "0x095ea7b3",
-            "value": "0x0",
-        }
-    ],
-}
+VECTORS = json.loads(
+    (Path(__file__).parent / "fixtures" / "vectors.json").read_text(encoding="utf-8")
+)["vectors"]
+
+
+def probe(name: str) -> dict[str, Any]:
+    return next(v for v in VECTORS if v["name"] == name)
+
+
+PLAN = probe("live plan-8453-usdc-wrapped-recipient")
+GAS = probe("live gas-8453-x56")
+PLAN_BODY = PLAN["response"]
 TRACK_BODY = {
     "status": "delivered",
     "matchesPlan": True,
@@ -79,28 +72,13 @@ FIND_BODY = {
         }
     ],
 }
-GAS_BODY = {
-    "offer": "g2.example",
-    "kind": "swap",
-    "payChainId": 8453,
-    "chainId": 8453,
-    "payTo": "0x245eCD38d796641411A242dE1Cb72e1591de1106",
-    "fee": {"usdc": "0.041258"},
-    "receive": {"symbol": "ETH", "minimum": "0.0021"},
-    "deadline": 1793623969,
-}
+GAS_BODY = GAS["response"]
 
 CASES = [
     pytest.param(
         CleavePlanSwap,
         "/agent/v1/plan_swap",
-        {
-            "fromChainId": 8453,
-            "sellToken": "USDC",
-            "buyToken": "WETH",
-            "amount": "25",
-            "wallet": WALLET,
-        },
+        PLAN["request"],
         PLAN_BODY,
         id="plan_swap",
     ),
@@ -121,7 +99,7 @@ CASES = [
     pytest.param(
         CleaveGetGas,
         "/agent/v1/get_gas",
-        {"payChainId": 8453, "chainId": 8453, "recipient": WALLET, "amount": "5"},
+        GAS["request"],
         GAS_BODY,
         id="get_gas",
     ),
@@ -619,7 +597,7 @@ async def test_get_gas_relay_is_off_by_default_async() -> None:
 
 def test_get_gas_offer_works_with_relay_off() -> None:
     api, seen = mocked(answer(200, GAS_BODY))
-    args = {"payChainId": 8453, "chainId": 10, "recipient": WALLET, "amount": "5"}
+    args = GAS["request"]
     assert CleaveGetGas(api_wrapper=api).invoke(args) == GAS_BODY
     assert json.loads(seen[0].content) == args
 
@@ -863,9 +841,9 @@ def test_tool_descriptions_add_only_package_suffixes() -> None:
     assert "g:<payChainId>:<orderHash>" in GAS_SUBMIT
 
 
-ORDER_HASH = "0x" + "ab" * 32
-OFFER_BODY = {**GAS_BODY, "offer": "g2.known", "orderHash": ORDER_HASH}
-PHASE1 = {"payChainId": 8453, "chainId": 8453, "recipient": WALLET, "amount": "5"}
+ORDER_HASH = GAS_BODY["orderHash"]
+OFFER_BODY = {**GAS_BODY, "offer": "g2.known"}
+PHASE1 = GAS["request"]
 
 
 def submitting(fail: Callable[[httpx.Request], httpx.Response]) -> Handler:
