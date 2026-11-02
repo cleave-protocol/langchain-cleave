@@ -1,0 +1,175 @@
+{
+  "plan_swap": {
+    "type": "object",
+    "properties": {
+      "fromChainId": {
+        "type": "integer",
+        "enum": [
+          1,
+          10,
+          56,
+          137,
+          8453,
+          42161
+        ]
+      },
+      "toChainId": {
+        "type": "integer",
+        "enum": [
+          1,
+          10,
+          56,
+          137,
+          8453,
+          42161
+        ]
+      },
+      "sellToken": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "description": "A listed symbol or a contract address"
+      },
+      "buyToken": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "description": "A listed symbol or a contract address"
+      },
+      "amount": {
+        "type": "string",
+        "pattern": "^[0-9]+(\\.[0-9]+)?$",
+        "description": "A decimal amount in token units"
+      },
+      "wallet": {
+        "type": "string",
+        "pattern": "^0x[0-9a-fA-F]{40}$"
+      },
+      "recipient": {
+        "type": "string",
+        "pattern": "^0x[0-9a-fA-F]{40}$"
+      },
+      "maxSlippageBps": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 5000
+      }
+    },
+    "required": [
+      "fromChainId",
+      "sellToken",
+      "buyToken",
+      "amount",
+      "wallet"
+    ],
+    "additionalProperties": false
+  },
+  "track_swap": {
+    "type": "object",
+    "properties": {
+      "chainId": {
+        "type": "integer",
+        "enum": [
+          1,
+          10,
+          56,
+          137,
+          8453,
+          42161
+        ]
+      },
+      "txHash": {
+        "type": "string",
+        "pattern": "^0x[0-9a-fA-F]{64}$"
+      },
+      "requestId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 79,
+        "pattern": "^([A-Za-z0-9-]{1,64}|g:[0-9]{1,10}:0x[0-9a-fA-F]{64})$"
+      }
+    },
+    "additionalProperties": false
+  },
+  "find_token": {
+    "type": "object",
+    "properties": {
+      "chainId": {
+        "type": "integer",
+        "enum": [
+          1,
+          10,
+          56,
+          137,
+          8453,
+          42161
+        ]
+      },
+      "query": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "description": "A symbol or a contract address"
+      }
+    },
+    "required": [
+      "chainId",
+      "query"
+    ],
+    "additionalProperties": false
+  },
+  "get_gas": {
+    "type": "object",
+    "properties": {
+      "payChainId": {
+        "type": "integer",
+        "enum": [
+          1,
+          10,
+          56,
+          137,
+          8453,
+          42161
+        ]
+      },
+      "chainId": {
+        "type": "integer",
+        "enum": [
+          1,
+          10,
+          56,
+          137,
+          8453,
+          42161
+        ]
+      },
+      "recipient": {
+        "type": "string",
+        "pattern": "^0x[0-9a-fA-F]{40}$"
+      },
+      "amount": {
+        "type": "string",
+        "pattern": "^[0-9]+(\\.[0-9]+)?$",
+        "description": "A decimal amount in token units"
+      },
+      "wallet": {
+        "type": "string",
+        "pattern": "^0x[0-9a-fA-F]{40}$"
+      },
+      "refundTo": {
+        "type": "string",
+        "pattern": "^0x[0-9a-fA-F]{40}$"
+      },
+      "offer": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 4096
+      },
+      "signature": {
+        "type": "string",
+        "pattern": "^0x[0-9a-fA-F]+$"
+      }
+    },
+    "additionalProperties": false
+  }
+}

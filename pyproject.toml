@@ -1,0 +1,77 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "langchain-cleave"
+version = "0.1.0"
+description = "An integration package connecting Cleave and LangChain"
+license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
+requires-python = ">=3.10.0,<4.0.0"
+keywords = ["langchain", "cleave", "dex", "swap", "cross-chain", "agents"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+dependencies = [
+    "langchain-core>=1.0.0,<2.0.0",
+    "httpx>=0.27.0,<1.0.0",
+    "pydantic>=2.7.4,<3.0.0",
+]
+
+[project.urls]
+Homepage = "https://cleave.fi/docs/agents"
+Documentation = "https://cleave.fi/docs/agents/rest"
+Repository = "https://github.com/cleave-protocol/langchain-cleave"
+Issues = "https://github.com/cleave-protocol/langchain-cleave/issues"
+
+[dependency-groups]
+test = [
+    "pytest>=9.0.3,<10.0.0",
+    "pytest-asyncio>=1.3.0,<2.0.0",
+    "pytest-socket>=0.7.0,<1.0.0",
+    "langchain-tests>=1.1.9,<2.0.0",
+]
+test_integration = []
+lint = ["ruff>=0.13.1,<1.0.0"]
+typing = ["mypy>=1.10,<3.0"]
+dev = []
+
+[tool.hatch.build.targets.sdist]
+include = ["langchain_cleave", "tests", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["langchain_cleave"]
+
+[tool.mypy]
+plugins = ["pydantic.mypy"]
+disallow_untyped_defs = true
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "T201", "UP", "S"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.extend-per-file-ignores]
+"tests/**/*.py" = ["S101"]
+"langchain_cleave/_descriptions.py" = ["S105"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --strict-config --durations=5"
+markers = [
+    "compile: mark placeholder test used to compile integration tests without running them",
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
