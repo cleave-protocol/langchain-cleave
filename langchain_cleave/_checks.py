@@ -548,7 +548,7 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
             or "0x" + _word(main.data, rail_word, "P5", "railId")
             != chain.stargate_rail_id
         ):
-            _fail("P5", "only the Stargate rail takes a native messaging fee")
+            _fail("P5", "this route takes no native messaging fee")
         value += _units(fee.get("amount"), 18, "P5", "fee amount")
     if main.value != value:
         _fail("P5", "the main call sends another native value")
