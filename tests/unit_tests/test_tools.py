@@ -438,6 +438,15 @@ def test_validation_raises_when_unhandled(cls: type[BaseTool], args: dict) -> No
     assert seen == []
 
 
+def test_an_explicit_null_chain_id_never_reaches_the_api() -> None:
+    api, seen = mocked(answer(200, {}))
+    error = invalid_param(
+        CleavePlanSwap(api_wrapper=api).invoke({**PLAN_ARGS, "toChainId": None})
+    )
+    assert "toChainId" in error["detail"]
+    assert seen == []
+
+
 def test_invalid_param_detail_names_the_field() -> None:
     api, _ = mocked(answer(200, {}))
     error = invalid_param(

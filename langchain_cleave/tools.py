@@ -52,6 +52,10 @@ def _no_default(schema: dict[str, Any]) -> None:
     schema.pop("default", None)
 
 
+def _sent(kwargs: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in kwargs.items() if v is not None}
+
+
 def omittable(**kwargs: Any) -> Any:
     return Field(default=None, json_schema_extra=_no_default, **kwargs)
 
@@ -225,7 +229,7 @@ class _CleaveTool(BaseTool):
         run_manager: CallbackManagerForToolRun | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        payload = {k: v for k, v in kwargs.items() if v is not None}
+        payload = _sent(kwargs)
         return self.api_wrapper.call(self.endpoint, payload)
 
     async def _arun(
@@ -233,7 +237,7 @@ class _CleaveTool(BaseTool):
         run_manager: AsyncCallbackManagerForToolRun | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        payload = {k: v for k, v in kwargs.items() if v is not None}
+        payload = _sent(kwargs)
         return await self.api_wrapper.acall(self.endpoint, payload)
 
 
@@ -254,7 +258,7 @@ class CleavePlanSwap(_CleaveTool):
             raise api_error(err) from err
         return screened(
             answer,
-            lambda: check_plan_swap(kwargs, answer),
+            lambda: check_plan_swap(_sent(kwargs), answer),
             lambda: keep_plan(answer),
         )
 
@@ -269,7 +273,7 @@ class CleavePlanSwap(_CleaveTool):
             raise api_error(err) from err
         return screened(
             answer,
-            lambda: check_plan_swap(kwargs, answer),
+            lambda: check_plan_swap(_sent(kwargs), answer),
             lambda: keep_plan(answer),
         )
 
@@ -387,8 +391,8 @@ class CleaveGetGas(_CleaveTool):
             raise api_error(err) from err
         answer = screened(
             answer,
-            lambda: check_get_gas(kwargs, answer),
-            lambda: keep_gas(kwargs, answer),
+            lambda: check_get_gas(_sent(kwargs), answer),
+            lambda: keep_gas(_sent(kwargs), answer),
         )
         if offer is None:
             self._remember(answer)
@@ -409,8 +413,8 @@ class CleaveGetGas(_CleaveTool):
             raise api_error(err) from err
         answer = screened(
             answer,
-            lambda: check_get_gas(kwargs, answer),
-            lambda: keep_gas(kwargs, answer),
+            lambda: check_get_gas(_sent(kwargs), answer),
+            lambda: keep_gas(_sent(kwargs), answer),
         )
         if offer is None:
             self._remember(answer)

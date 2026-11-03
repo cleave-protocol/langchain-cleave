@@ -279,8 +279,9 @@ def _guard(run: Callable[[_Step], None]) -> CheckResult:
 
 
 def _request(request: Mapping[str, Any] | BaseModel) -> dict[str, Any]:
-    fields = request.model_dump() if isinstance(request, BaseModel) else request
-    return {k: v for k, v in fields.items() if v is not None}
+    if isinstance(request, BaseModel):
+        return request.model_dump(exclude_unset=True)
+    return dict(request)
 
 
 def _is_number(v: Any) -> bool:
@@ -571,14 +572,25 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
         shown = receive.get("token") if isinstance(receive, dict) else None
         buy: Any = req.get("buyToken")
         buy = buy.strip(JS_SPACE)
-        if isinstance(shown, str) and ADDRESS.fullmatch(shown):
-            token_out: str | None = shown.lower()
-        elif ADDRESS.fullmatch(buy):
-            token_out = buy.lower()
+        requested: str | None
+        if ADDRESS.fullmatch(buy):
+            requested = buy.lower()
         elif dst is None:
-            token_out = None
+            requested = None
         else:
-            token_out = dst.symbols.get(buy.lower())
+            requested = dst.symbols.get(buy.lower())
+        shown_token = (
+            shown.lower()
+            if isinstance(shown, str) and ADDRESS.fullmatch(shown)
+            else None
+        )
+        if (
+            requested is not None
+            and shown_token is not None
+            and shown_token != requested
+        ):
+            _fail("P5", "receive.token is not the buy token")
+        token_out = requested if requested is not None else shown_token
         if same_chain:
             allowed = [free]
         elif token not in chain.stablecoins:
@@ -712,7 +724,7 @@ def _encode_order(
 
 
 def _gas(req: dict[str, Any], body: Mapping[str, Any], now_sec: int, at: _Step) -> None:
-    if "offer" in req:
+    if req.get("offer") is not None:
         return
 
     at("G1")
@@ -986,7 +998,7 @@ def keep_plan(body: Mapping[str, Any]) -> dict[str, Any]:
 def keep_gas(
     request: Mapping[str, Any] | BaseModel, body: Mapping[str, Any]
 ) -> dict[str, Any]:
-    if "offer" in _request(request):
+    if _request(request).get("offer") is not None:
         return _pick(body, SUBMIT_KEYS)
     out = _pick(body, OFFER_KEYS)
     typed = body.get("typedData")

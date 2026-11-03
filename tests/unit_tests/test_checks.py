@@ -67,7 +67,7 @@ def test_vectors_cover_every_rule_live_probes_and_the_table_version() -> None:
     rules = {v["expect"]["rule"] for v in VECTORS if v["expect"]["result"] == "fail"}
     assert sorted(rules) == RULES
     assert len([v for v in VECTORS if v["name"].startswith("live ")]) >= 30
-    assert len(VECTORS) == 294
+    assert len(VECTORS) == 300
     assert FILE["allowlistVersion"] == ALLOWLIST["version"]
 
 
@@ -461,11 +461,20 @@ def test_a_boolean_chain_id_is_not_chain_1() -> None:
     assert r.rule == "P1"
 
 
-def test_a_request_model_and_omitted_none_fields_are_accepted() -> None:
+def test_a_request_model_with_omitted_fields_is_accepted() -> None:
     model = PlanSwapInput(**PLAN["request"])
+    assert "toChainId" not in model.model_dump(exclude_unset=True)
     assert check_plan_swap(model, PLAN["response"]) == CheckResult(True)
-    request = {**PLAN["request"], "recipient": None, "toChainId": None}
-    assert check_plan_swap(request, PLAN["response"]) == CheckResult(True)
+
+
+def test_an_explicit_none_is_not_an_omitted_field() -> None:
+    request = {**PLAN["request"], "toChainId": None}
+    r = check_plan_swap(request, PLAN["response"])
+    assert r == CheckResult(
+        False, "P2", "P2: the destination chain is not on the allowlist"
+    )
+    request = {**PLAN["request"], "recipient": None}
+    assert check_plan_swap(request, PLAN["response"]).ok is False
 
 
 def test_a_boolean_is_not_an_unsigned_integer() -> None:
