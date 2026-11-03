@@ -67,7 +67,7 @@ def test_vectors_cover_every_rule_live_probes_and_the_table_version() -> None:
     rules = {v["expect"]["rule"] for v in VECTORS if v["expect"]["result"] == "fail"}
     assert sorted(rules) == RULES
     assert len([v for v in VECTORS if v["name"].startswith("live ")]) >= 30
-    assert len(VECTORS) == 284
+    assert len(VECTORS) == 294
     assert FILE["allowlistVersion"] == ALLOWLIST["version"]
 
 
@@ -91,6 +91,13 @@ NEGATIVES = [
     ("gas recipient swapped", "G2: the order pays another recipient"),
     ("gas router swapped", "G3: order.router is not the pinned one"),
     ("gas message.to swapped", "G4: the authorization pays another address"),
+    (
+        "native messaging fee on a shell swap",
+        "P5: this route takes no native messaging fee",
+    ),
+    ("toChainId as a string", "P2: the destination chain is not on the allowlist"),
+    ("gas chainId as a string", "G1: the delivery chain is not on the allowlist"),
+    ("gas payChainId as a string", "G1: the pay chain is not on the allowlist"),
 ]
 
 
@@ -100,6 +107,23 @@ NEGATIVES = [
 def test_one_negative_per_rule_names_its_reason(name: str, message: str) -> None:
     r = run_check(by_name(name))
     assert (r.ok, r.rule, r.message) == (False, message[:2], message)
+
+
+@pytest.mark.parametrize(
+    ("name", "field", "rule"),
+    [
+        ("live plan-8453-usdc-x42161-weth", "toChainId", "P2"),
+        ("live plan-8453-usdc-x42161-weth", "fromChainId", "P2"),
+        ("live gas-8453-x42161-recipient", "chainId", "G1"),
+        ("live gas-8453-x42161-recipient", "payChainId", "G1"),
+    ],
+)
+def test_a_float_chain_id_is_refused(name: str, field: str, rule: str) -> None:
+    v = by_name(name)
+    assert run_check(v).ok
+    v["request"][field] = float(v["request"][field])
+    r = run_check(v)
+    assert (r.ok, r.rule) == (False, rule)
 
 
 def pinned_table() -> Any:

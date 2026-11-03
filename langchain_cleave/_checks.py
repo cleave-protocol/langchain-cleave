@@ -299,6 +299,13 @@ def _lookup(chain_id: Any) -> _Chain | None:
     return CHAINS.get(chain_id) if _is_number(chain_id) else None
 
 
+def _allowed_chain(v: Any, rule: CheckRule, what: str) -> _Chain:
+    chain = CHAINS.get(v) if type(v) is int else None
+    if chain is None:
+        _fail(rule, f"{what} is not on the allowlist")
+    return chain
+
+
 def _object(v: Any, rule: CheckRule, what: str) -> dict[str, Any]:
     if isinstance(v, dict):
         return v
@@ -427,9 +434,8 @@ def _plan(req: dict[str, Any], body: Mapping[str, Any], at: _Step) -> None:
     selector = main.data[:10]
 
     at("P2")
-    chain = _lookup(from_chain)
-    if chain is None:
-        _fail("P2", "the chain is not on the allowlist")
+    chain = _allowed_chain(from_chain, "P2", "the chain")
+    _allowed_chain(to_chain, "P2", "the destination chain")
     target = chain.targets.get(main.to)
     if target is None:
         _fail("P2", "the main call's target is not on the allowlist")
@@ -716,9 +722,10 @@ def _gas(req: dict[str, Any], body: Mapping[str, Any], now_sec: int, at: _Step) 
     chain_id = req.get("chainId")
     if chain_id is None:
         _fail("G1", "the request has no delivery chain")
-    pay = _lookup(pay_chain_id)
-    if pay is None or pay.gas_pay is None:
+    pay = _allowed_chain(pay_chain_id, "G1", "the pay chain")
+    if pay.gas_pay is None:
         _fail("G1", "the pay chain is not on the allowlist")
+    _allowed_chain(chain_id, "G1", "the delivery chain")
     gas_pay = pay.gas_pay
     usdc = pay.usdc
     wallet = _address(req["wallet"], "G1", "wallet") if "wallet" in req else None
