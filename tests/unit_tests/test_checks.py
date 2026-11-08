@@ -525,3 +525,112 @@ def test_a_padded_buy_symbol_is_tied_to_the_wrap_direction() -> None:
     request = {**v["request"], "buyToken": " ETH "}
     r = check_plan_swap(request, v["response"])
     assert r.message == "P6: the main call delivers another token"
+
+
+GAS_PLAN = by_name("live plan-8453-usdc-x42161-weth")
+GAS_LAST = len(GAS_PLAN["response"]["calls"]) - 1
+
+
+def with_gas(v: dict[str, Any], at: int, gas: Any) -> dict[str, Any]:
+    body = copy.deepcopy(v["response"])
+    body["calls"][at]["gas"] = gas
+    return body
+
+
+def test_the_gas_plan_has_an_approval_before_the_main_call() -> None:
+    assert GAS_LAST == 1
+    assert (
+        screen_plan_swap(GAS_PLAN["request"], GAS_PLAN["response"])
+        == (GAS_PLAN["response"])
+    )
+
+
+@pytest.mark.parametrize(
+    "gas", ["0x5208", "0x3d090", "0x3D090", "0x1c9c380", "0x1e84800", "0x2000000"]
+)
+def test_gas_on_the_last_call_passes_through_unchanged(gas: str) -> None:
+    body = with_gas(GAS_PLAN, GAS_LAST, gas)
+    assert screen_plan_swap(GAS_PLAN["request"], body) == body
+
+
+def test_gas_is_left_out_when_the_api_sent_none() -> None:
+    out = screen_plan_swap(GAS_PLAN["request"], GAS_PLAN["response"])
+    assert not any("gas" in c for c in out["calls"])
+
+
+@pytest.mark.parametrize(
+    "gas",
+    [
+        "0x5207",
+        "0x2000001",
+        "0x05208",
+        "0x0",
+        "0x",
+        "5208",
+        "0X5208",
+        "0xZZZZ",
+        "21000",
+        "0x" + "f" * 65,
+        "0x5208\n",
+        250000,
+        None,
+        True,
+        {"gas": "0x5208"},
+        ["0x5208"],
+    ],
+    ids=repr,
+)
+def test_bad_gas_is_dropped_and_the_call_is_otherwise_unchanged(gas: Any) -> None:
+    body = with_gas(GAS_PLAN, GAS_LAST, gas)
+    assert screen_plan_swap(GAS_PLAN["request"], body) == GAS_PLAN["response"]
+
+
+def test_gas_on_a_call_before_the_last_is_dropped() -> None:
+    req = GAS_PLAN["request"]
+    assert (
+        screen_plan_swap(req, with_gas(GAS_PLAN, 0, "0x5208")) == (GAS_PLAN["response"])
+    )
+    both = with_gas(GAS_PLAN, 0, "0x5208")
+    both["calls"][GAS_LAST]["gas"] = "0x5208"
+    assert screen_plan_swap(req, both) == with_gas(GAS_PLAN, GAS_LAST, "0x5208")
+
+
+@pytest.mark.parametrize(
+    ("at", "gas"),
+    [
+        (GAS_LAST, "0x3d090"),
+        (GAS_LAST, "0xZZ"),
+        (GAS_LAST, "0xffffffff"),
+        (0, "0x3d090"),
+    ],
+    ids=["valid", "malformed", "too-high", "on-the-approval"],
+)
+def test_a_plan_with_gas_is_checked_exactly_as_without_it(at: int, gas: Any) -> None:
+    req = GAS_PLAN["request"]
+    assert check_plan_swap(req, with_gas(GAS_PLAN, at, gas)) == check_plan_swap(
+        req, GAS_PLAN["response"]
+    )
+    bad = by_name("attacker spender")
+    bad_at = 0 if at == 0 else len(bad["response"]["calls"]) - 1
+    bad_body = with_gas(bad, bad_at, gas)
+    assert check_plan_swap(bad["request"], bad_body) == check_plan_swap(
+        bad["request"], bad["response"]
+    )
+    assert screen_plan_swap(bad["request"], bad_body) == screen_plan_swap(
+        bad["request"], bad["response"]
+    )
+
+
+def test_plan_swap_returns_the_last_call_gas_to_the_agent() -> None:
+    body = with_gas(GAS_PLAN, GAS_LAST, "0x3d090")
+    api, _ = answering(body)
+    out = CleavePlanSwap(api_wrapper=api).invoke(GAS_PLAN["request"])
+    assert out["calls"][GAS_LAST]["gas"] == "0x3d090"
+    assert out == body
+
+
+async def test_plan_swap_returns_the_last_call_gas_to_the_agent_async() -> None:
+    body = with_gas(GAS_PLAN, GAS_LAST, "0x3d090")
+    api, _ = answering(body)
+    out = await CleavePlanSwap(api_wrapper=api).ainvoke(GAS_PLAN["request"])
+    assert out == body

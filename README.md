@@ -117,6 +117,8 @@ A plan is a dict. Read it in this order:
 
 - `calls` are in signing order. Any approval calls come first; the last call
   is the swap or transfer itself.
+- The last call may also carry `gas`, an optional recommended gas limit in
+  hex.
 - Each approval must be mined and succeed before the next call is sent.
 - If `validUntil` passes before the last call is sent, plan again and sign
   the new calls.
@@ -238,7 +240,7 @@ recipient and the refund address in `order` before signing.
 | Check | Value |
 | --- | --- |
 | Amount | USDC, at most 6 decimals |
-| Smallest order | 2 USDC, or 5 USDC when the gas is delivered on Ethereum |
+| Smallest order | 0.8 USDC, or 5 USDC when Ethereum is the paying or receiving chain |
 | Largest order | 50 USDC |
 | USDC paid on | Ethereum, Arbitrum, Base, Optimism, Polygon |
 

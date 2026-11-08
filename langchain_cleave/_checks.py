@@ -989,9 +989,23 @@ def address_refusal(message: str) -> dict[str, Any]:
     return refusal_body("address_not_allowed", message, False)
 
 
+GAS_MIN = 21_000
+GAS_MAX = 33_554_432
+
+
+def _is_gas_limit(v: Any) -> bool:
+    if not (isinstance(v, str) and HEX_QUANTITY.fullmatch(v) and v[2] != "0"):
+        return False
+    return GAS_MIN <= int(v, 16) <= GAS_MAX
+
+
 def keep_plan(body: Mapping[str, Any]) -> dict[str, Any]:
     out = _pick(body, PLAN_KEYS)
-    out["calls"] = [_pick(c, CALL_KEYS) for c in body["calls"]]
+    calls = body["calls"]
+    kept = [_pick(c, CALL_KEYS) for c in calls]
+    if kept and _is_gas_limit(calls[-1].get("gas")):
+        kept[-1]["gas"] = calls[-1]["gas"]
+    out["calls"] = kept
     return out
 
 
