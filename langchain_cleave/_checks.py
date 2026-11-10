@@ -947,6 +947,7 @@ OFFER_KEYS = (
     "message",
     "orderHash",
     "outcome",
+    "outcomeGuaranteed",
     "pay",
     "fee",
     "receive",
@@ -955,6 +956,9 @@ OFFER_KEYS = (
     "typedData",
     "etaSec",
     "verify",
+    "terms",
+    "privacy",
+    "notice",
 )
 SUBMIT_KEYS = ("requestId", "state", "payTo", "deadline")
 ERROR_KEYS = (

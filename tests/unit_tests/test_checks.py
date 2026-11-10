@@ -634,3 +634,67 @@ async def test_plan_swap_returns_the_last_call_gas_to_the_agent_async() -> None:
     api, _ = answering(body)
     out = await CleavePlanSwap(api_wrapper=api).ainvoke(GAS_PLAN["request"])
     assert out == body
+
+
+TERMS = {
+    "outcomeGuaranteed": False,
+    "terms": "https://cleave.fi/terms",
+    "privacy": "https://cleave.fi/privacy",
+    "notice": "notice text",
+}
+
+
+def unguaranteed(receive: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    return {**receive, **{k: {**receive[k], "guaranteed": False} for k in keys}}
+
+
+def test_plan_swap_keeps_guaranteed_false_on_the_fallback_and_the_refund() -> None:
+    v = by_name("live plan-8453-usdc-x42161-weth")
+    receive = v["response"]["receive"]
+    assert receive["fallback"] is not None
+    assert receive["refund"] is not None
+    body = {**v["response"], "receive": unguaranteed(receive, ("fallback", "refund"))}
+    assert check_plan_swap(v["request"], body) == check_plan_swap(
+        v["request"], v["response"]
+    )
+    out = screen_plan_swap(v["request"], body)
+    assert out == body
+    assert out["receive"]["fallback"]["guaranteed"] is False
+    assert out["receive"]["refund"]["guaranteed"] is False
+    api, _ = answering(body)
+    assert CleavePlanSwap(api_wrapper=api).invoke(v["request"]) == body
+
+
+TERMS_OFFERS = [
+    "live gas-8453-x42161-recipient",
+    "live gas-8453-same",
+    "live final g-8453-same-nowallet",
+]
+
+
+@pytest.mark.parametrize("name", TERMS_OFFERS)
+def test_get_gas_keeps_the_terms_fields_and_guaranteed_false(name: str) -> None:
+    v = by_name(name)
+    receive = v["response"]["receive"]
+    if "fallback" in receive:
+        receive = unguaranteed(receive, ("fallback",))
+    body = {**v["response"], **TERMS, "receive": receive}
+    assert check_get_gas(v["request"], body, now_of(v)) == check_get_gas(
+        v["request"], v["response"], now_of(v)
+    )
+    out = screen_get_gas(v["request"], body, now_of(v))
+    assert out == body
+    for key, value in TERMS.items():
+        assert out[key] == value
+    if "fallback" in receive:
+        assert out["receive"]["fallback"]["guaranteed"] is False
+    api, _ = answering(body)
+    assert CleaveGetGas(api_wrapper=api).invoke(v["request"]) == body
+
+
+async def test_get_gas_keeps_the_terms_fields_async() -> None:
+    v = by_name(TERMS_OFFERS[0])
+    receive = unguaranteed(v["response"]["receive"], ("fallback",))
+    body = {**v["response"], **TERMS, "receive": receive}
+    api, _ = answering(body)
+    assert await CleaveGetGas(api_wrapper=api).ainvoke(v["request"]) == body

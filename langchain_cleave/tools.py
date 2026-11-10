@@ -124,7 +124,7 @@ class GetGasInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     payChainId: ChainId = omittable(description="Chain id the USDC is paid on")
-    chainId: ChainId = omittable(description="Chain id the native coin is delivered on")
+    chainId: ChainId = omittable(description="Chain id the native coin is for")
     recipient: str = omittable(
         pattern=ADDRESS, description="Who receives the native coin"
     )
@@ -142,7 +142,7 @@ class GetGasInput(BaseModel):
     refundTo: str = omittable(
         pattern=ADDRESS,
         description=(
-            "Where a refund goes on the pay chain; an order from another chain "
+            "The refund address on the pay chain; an order from another chain "
             "needs wallet or refundTo"
         ),
     )

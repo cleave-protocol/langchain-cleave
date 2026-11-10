@@ -95,8 +95,9 @@ A plan is a dict. Read it in this order:
 1. `blocked` and `notices`: a `block` notice means `calls` is empty.
 2. `requiresConfirmation`: set by a `warn` notice or a recipient other than
    the wallet. Show the plan to the user before signing.
-3. `route.outcomeKind` and `receive`: what arrives, the minimum, and the
-   fallback or refund.
+3. `route.outcomeKind` and `receive`: what the route is written to deliver,
+   the minimum, and a possible fallback or refund, each with
+   `guaranteed: false`.
 4. `fees`: costs charged by others, such as a bridge fee. Cleave's fees are
    included in the price. Network gas is not listed.
 5. `validUntil`: sign and send `calls` in order before this unix time.
@@ -145,11 +146,12 @@ and tokens pinned in this package:
 - `cleave_plan_swap`: every call is on the planned chain and from the
   wallet. The last call goes to a listed contract and function that fits
   the route, sends to the planned chain and pays the requested recipient
-  where its calldata names one; refunds go to the wallet. Any call before
-  it is an approve of the sell token to that contract for exactly what the
-  last call pulls. For USDC and the chain's native or wrapped native coin,
-  the amount sold is the requested amount. The native value is what the
-  native amount sold and the rail's native messaging fee need.
+  where its calldata names one; a refund address it names is the wallet.
+  Any call before it is an approve of the sell token to that contract for
+  exactly what the last call pulls. For USDC and the chain's native or
+  wrapped native coin, the amount sold is the requested amount. The native
+  value is what the native amount sold and the rail's native messaging fee
+  need.
 - `cleave_get_gas`: the authorization is a USDC `ReceiveWithAuthorization`
   from the wallet on the paying chain. The order carries the requested
   amount, recipient and refund address, the pinned contracts, rail and fee
@@ -214,8 +216,8 @@ are refused in the other.
    native amount, the deadline, the order and, only when `wallet` is given,
    `typedData`: the USDC authorization to sign.
 2. Submit: `offer`, `signature` and `wallet`. It passes the order the wallet
-   signed to Cleave's relayer, which executes it, and returns a `requestId`
-   for `cleave_track_swap`.
+   signed to Cleave's relayer, which may submit it, and returns a
+   `requestId` for `cleave_track_swap`.
 
 ```python
 from langchain_cleave import CleaveGetGas
@@ -244,10 +246,13 @@ recipient and the refund address in `order` before signing.
 | Largest order | 50 USDC |
 | USDC paid on | Ethereum, Arbitrum, Base, Optimism, Polygon |
 
-- An authorization that is never submitted never debits the wallet.
-- Once an order is funded, its outcome is whatever `cleave_track_swap`
-  reports for `g:<payChainId>:<orderHash>`. Do not assume a refund because a
-  deadline passed; track until the status shows it.
+- The offer carries `outcomeGuaranteed: false`, `terms`, `privacy` and
+  `notice`, and a `receive.fallback` carries `guaranteed: false`; the tool
+  returns them as the API sends them.
+- The USDC authorization is set to end before the order deadline, and
+  Cleave does not promise to submit it before then.
+- Once an order is funded, report the status `cleave_track_swap` gives for
+  `g:<payChainId>:<orderHash>`; do not assume delivery or a refund.
 - See [x402 gas top-up](https://cleave.fi/docs/agents/gas).
 
 ### The relay is off by default

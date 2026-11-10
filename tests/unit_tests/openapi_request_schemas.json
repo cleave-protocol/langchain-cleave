@@ -11,7 +11,8 @@
           137,
           8453,
           42161
-        ]
+        ],
+        "description": "The chain of the token to sell"
       },
       "toChainId": {
         "type": "integer",
@@ -22,7 +23,8 @@
           137,
           8453,
           42161
-        ]
+        ],
+        "description": "The chain of the token to buy; fromChainId when omitted"
       },
       "sellToken": {
         "type": "string",
@@ -43,16 +45,19 @@
       },
       "wallet": {
         "type": "string",
-        "pattern": "^0x[0-9a-fA-F]{40}$"
+        "pattern": "^0x[0-9a-fA-F]{40}$",
+        "description": "The wallet that sells the token and signs the returned calls"
       },
       "recipient": {
         "type": "string",
-        "pattern": "^0x[0-9a-fA-F]{40}$"
+        "pattern": "^0x[0-9a-fA-F]{40}$",
+        "description": "The address that receives the bought token; the wallet when omitted"
       },
       "maxSlippageBps": {
         "type": "integer",
         "minimum": 0,
-        "maximum": 5000
+        "maximum": 5000,
+        "description": "The maximum slippage in basis points, from 0 to 5000, and at least 1 for a cross-chain plan that swaps on both chains; 50 when omitted"
       }
     },
     "required": [
@@ -76,17 +81,20 @@
           137,
           8453,
           42161
-        ]
+        ],
+        "description": "The chain the transaction was sent on; required unless requestId is a gas order's, in g:<chainId>:<orderHash> form"
       },
       "txHash": {
         "type": "string",
-        "pattern": "^0x[0-9a-fA-F]{64}$"
+        "pattern": "^0x[0-9a-fA-F]{64}$",
+        "description": "The transaction hash, also while it is pending; required unless requestId is a gas order's, in g:<chainId>:<orderHash> form"
       },
       "requestId": {
         "type": "string",
         "minLength": 1,
         "maxLength": 79,
-        "pattern": "^([A-Za-z0-9-]{1,64}|g:[0-9]{1,10}:0x[0-9a-fA-F]{64})$"
+        "pattern": "^([A-Za-z0-9-]{1,64}|g:[0-9]{1,10}:0x[0-9a-fA-F]{64})$",
+        "description": "The requestId of the plan, used to compare the transaction with it, or of a gas order, in g:<chainId>:<orderHash> form, which is enough alone"
       }
     },
     "additionalProperties": false
@@ -103,7 +111,8 @@
           137,
           8453,
           42161
-        ]
+        ],
+        "description": "The chain to search on"
       },
       "query": {
         "type": "string",
@@ -130,7 +139,8 @@
           137,
           8453,
           42161
-        ]
+        ],
+        "description": "The chain the USDC is paid on; required without offer, not accepted with it"
       },
       "chainId": {
         "type": "integer",
@@ -141,11 +151,13 @@
           137,
           8453,
           42161
-        ]
+        ],
+        "description": "The chain the native gas is for; required without offer, not accepted with it"
       },
       "recipient": {
         "type": "string",
-        "pattern": "^0x[0-9a-fA-F]{40}$"
+        "pattern": "^0x[0-9a-fA-F]{40}$",
+        "description": "The address that receives the gas; required without offer, not accepted with it"
       },
       "amount": {
         "type": "string",
@@ -154,20 +166,24 @@
       },
       "wallet": {
         "type": "string",
-        "pattern": "^0x[0-9a-fA-F]{40}$"
+        "pattern": "^0x[0-9a-fA-F]{40}$",
+        "description": "The paying wallet; required with offer. Without offer, the answer holds an authorization to sign only when it is given, and it is the refund address when refundTo is not given"
       },
       "refundTo": {
         "type": "string",
-        "pattern": "^0x[0-9a-fA-F]{40}$"
+        "pattern": "^0x[0-9a-fA-F]{40}$",
+        "description": "The refund address on the paying chain; a cross-chain order needs refundTo or wallet, and a one-chain order with neither uses recipient; not accepted with offer"
       },
       "offer": {
         "type": "string",
         "minLength": 1,
-        "maxLength": 4096
+        "maxLength": 4096,
+        "description": "The offer value from the answer to a call without offer; when given, the signed order is submitted and only offer, signature and wallet are accepted"
       },
       "signature": {
         "type": "string",
-        "pattern": "^0x[0-9a-fA-F]+$"
+        "pattern": "^0x[0-9a-fA-F]+$",
+        "description": "The wallet's hex signature of the offer's USDC authorization; required with offer, not accepted without it"
       }
     },
     "additionalProperties": false
